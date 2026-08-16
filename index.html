@@ -53,7 +53,7 @@ body::after{
 }
 @keyframes drift{from{transform:translate3d(-1.5%,-1%,0) scale(1.02)}to{transform:translate3d(1.5%,1.5%,0) scale(1.06)}}
 
-.alley{max-width:860px;margin:0 auto;padding:clamp(28px,6vw,64px) clamp(16px,4vw,32px) 80px}
+.alley{max-width:900px;margin:0 auto;padding:clamp(28px,6vw,64px) clamp(16px,4vw,32px) 80px}
 
 /* ── 招牌 ─────────────────────── */
 .sign{text-align:center;margin-bottom:clamp(30px,6vw,52px)}
@@ -165,8 +165,21 @@ textarea:focus,input:focus,select:focus{
 
 /* ── 提問列 ─────────────────────── */
 ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
-.qrow{display:grid;grid-template-columns:1.9rem 1fr 5.3rem;gap:8px;align-items:center}
-.qrow .qtext{padding:6px 10px;font-size:.9rem;line-height:1.5}
+.qrow{
+  display:grid;
+  grid-template-columns:1.9rem minmax(0,1.6fr) 5.3rem minmax(0,1fr);
+  gap:8px;align-items:center;
+}
+.qrow .qtext,.qrow .qnote{padding:6px 10px;font-size:.9rem;line-height:1.5}
+.qrow .qnote{
+  background:rgba(5,5,12,.35);border-color:rgba(160,107,255,.2);
+  color:#b9b1d8;font-size:.84rem;
+}
+.qrow .qnote::placeholder{color:#453e60}
+.qrow .qnote:focus{
+  border-color:var(--violet);
+  box-shadow:0 0 0 1px var(--violet),0 0 16px rgba(160,107,255,.26),inset 0 0 20px rgba(160,107,255,.06);
+}
 .qnum{font-family:var(--mono);font-size:.8rem;color:#4f4869;text-align:right;transition:color .2s,text-shadow .2s}
 .qrow.filled .qnum{color:var(--cyan);text-shadow:0 0 10px rgba(61,240,255,.8)}
 .sel{position:relative}
@@ -231,10 +244,12 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 
 :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 
-@media (max-width:560px){
-  .qrow{grid-template-columns:1.6rem 1fr 4.9rem;gap:6px}
-  .qrow .qtext{padding:6px 8px;font-size:.85rem}
+@media (max-width:640px){
+  .qrow{grid-template-columns:1.6rem 1fr 4.9rem;gap:6px 6px}
+  .qrow .qtext,.qrow .qnote{padding:6px 8px;font-size:.85rem}
+  .qrow .qnote{grid-column:2 / -1;font-size:.8rem}
   .sel select{padding:6px 17px 6px 7px;font-size:.76rem}
+  ol.qlist{gap:12px}
   .lifebar{gap:12px}
   .bulbs{order:3;width:100%;flex:none}
 }
@@ -316,9 +331,12 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
         veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts');
 
   const pad = n => String(n).padStart(2,'0');
+  // 用掉生命的條件：問了問題或收到回答。只寫註解不算。
   const alive = r => !!(r && (r.q.trim() || r.a));
+  // 有任何內容（含註解），用來判斷收起來的列是否還存著東西。
+  const hasAny = r => !!(r && (r.q.trim() || r.a || r.n.trim()));
 
-  function grow(){ while(state.rows.length < state.lives) state.rows.push({q:'',a:''}); }
+  function grow(){ while(state.rows.length < state.lives) state.rows.push({q:'',a:'',n:''}); }
   function used(){ return state.rows.slice(0, state.lives).filter(alive).length; }
 
   function drawRows(){
@@ -339,8 +357,10 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
             '<option value="F">F 否</option>' +
             '<option value="I">I 無關</option>' +
           '</select>' +
-        '</span>';
+        '</span>' +
+        '<input class="qnote" type="text" placeholder="註解" aria-label="第 '+(i+1)+' 題的註解">';
       li.querySelector('.qtext').value = r.q;
+      li.querySelector('.qnote').value = r.n;
       li.querySelector('select').value = r.a;
       qlist.appendChild(li);
     }
@@ -372,30 +392,32 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
     const b = document.createElement('b'); b.textContent = left;
     tally.append(b, ' / ' + state.lives);
 
-    const hidden = state.rows.slice(state.lives).filter(alive).length;
-    stash.textContent = hidden ? '另有 ' + hidden + ' 則提問被收起，內容還在，加回生命就會出現。' : '';
+    const hidden = state.rows.slice(state.lives).filter(hasAny).length;
+    stash.textContent = hidden ? '另有 ' + hidden + ' 列被收起，內容還在，加回生命就會出現。' : '';
 
     if(left === 0 && !announced){ announced = true; outOfLives(); }
     if(left > 0) announced = false;
   }
 
-  function refresh(){ drawStatus(); }
-
   qlist.addEventListener('input', e => {
-    if(!e.target.classList.contains('qtext')) return;
     const li = e.target.closest('.qrow');
-    state.rows[+li.dataset.i].q = e.target.value;
-    li.classList.toggle('filled', alive(state.rows[+li.dataset.i]));
-    refresh();
+    if(!li) return;
+    const r = state.rows[+li.dataset.i];
+    if(e.target.classList.contains('qtext'))      r.q = e.target.value;
+    else if(e.target.classList.contains('qnote')) { r.n = e.target.value; return; }
+    else return;
+    li.classList.toggle('filled', alive(r));
+    drawStatus();
   });
 
   qlist.addEventListener('change', e => {
     if(e.target.tagName !== 'SELECT') return;
     const li = e.target.closest('.qrow');
-    state.rows[+li.dataset.i].a = e.target.value;
+    const r = state.rows[+li.dataset.i];
+    r.a = e.target.value;
     li.querySelector('.sel').dataset.a = e.target.value;
-    li.classList.toggle('filled', alive(state.rows[+li.dataset.i]));
-    refresh();
+    li.classList.toggle('filled', alive(r));
+    drawStatus();
   });
 
   function setLives(n){
