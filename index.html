@@ -128,9 +128,18 @@ h2{
 }
 .stepper button:hover:not(:disabled){background:rgba(61,240,255,.12);text-shadow:0 0 10px var(--cyan)}
 .stepper button:disabled{color:#3a3552;cursor:not-allowed}
-.count{
-  font-family:var(--mono);font-size:1.35rem;min-width:46px;text-align:center;
+input.count{
+  font-family:var(--mono);font-size:1.35rem;line-height:1;
+  width:52px;padding:0;text-align:center;
+  background:transparent;border:0;border-bottom:1px solid transparent;border-radius:0;
   color:#eafcff;text-shadow:0 0 10px var(--cyan);
+  cursor:text;transition:border-color .2s;
+}
+input.count:hover{border-bottom-color:rgba(61,240,255,.35)}
+input.count:focus{
+  outline:none;box-shadow:none;
+  border-bottom-color:var(--cyan);
+  text-shadow:0 0 14px var(--cyan),0 0 30px rgba(61,240,255,.6);
 }
 .bulbs{display:flex;gap:7px;flex-wrap:wrap;flex:1;min-width:140px}
 .bulb{
@@ -275,7 +284,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
     <div class="lifebar">
       <div class="stepper">
         <button id="minus" type="button" aria-label="減少生命">−</button>
-        <span class="count" id="count">6</span>
+        <input id="count" class="count" type="text" inputmode="numeric" autocomplete="off"
+               maxlength="2" value="6" aria-label="生命數，可直接輸入">
         <button id="plus" type="button" aria-label="增加生命">+</button>
       </div>
       <div class="bulbs" id="bulbs" aria-hidden="true"></div>
@@ -368,7 +378,7 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 
   function drawStatus(){
     const u = used(), left = state.lives - u;
-    count.textContent = state.lives;
+    if(document.activeElement !== count) count.value = state.lives;
     $('minus').disabled = state.lives <= MIN;
     $('plus').disabled  = state.lives >= MAX;
 
@@ -395,7 +405,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
     const hidden = state.rows.slice(state.lives).filter(hasAny).length;
     stash.textContent = hidden ? '另有 ' + hidden + ' 列被收起，內容還在，加回生命就會出現。' : '';
 
-    if(left === 0 && !announced){ announced = true; outOfLives(); }
+    // 正在輸入生命數時先不打斷，等離開欄位、數字確定了再提示
+    if(left === 0 && !announced && document.activeElement !== count){ announced = true; outOfLives(); }
     if(left > 0) announced = false;
   }
 
@@ -426,6 +437,26 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   }
   $('minus').onclick = () => setLives(state.lives - 1);
   $('plus').onclick  = () => setLives(state.lives + 1);
+
+  count.addEventListener('input', () => {
+    const digits = count.value.replace(/\D/g, '');
+    if(digits !== count.value) count.value = digits;
+    const n = parseInt(digits, 10);
+    // 打到一半的數字（空的、0、超出上限）先不動，等離開欄位再收斂
+    if(!isNaN(n) && n >= MIN && n <= MAX && n !== state.lives) setLives(n);
+  });
+  count.addEventListener('blur', () => {
+    const n = parseInt(count.value, 10);
+    if(!isNaN(n)) setLives(n);
+    count.value = state.lives;
+    drawStatus();   // 離開欄位才判斷生命是否已經用光
+  });
+  count.addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); count.blur(); }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); setLives(state.lives + 1); count.value = state.lives; }
+    else if(e.key === 'ArrowDown'){ e.preventDefault(); setLives(state.lives - 1); count.value = state.lives; }
+  });
+  count.addEventListener('focus', () => count.select());
 
   /* ── 提示視窗 ── */
   let lastFocus = null;
