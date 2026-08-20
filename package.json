@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
     "setup:kv": "wrangler kv namespace create CTRL",
-    "soup": "node tools/soup.mjs"
+    "soup": "node tools/soup.mjs",
+    "host": "node tools/host.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

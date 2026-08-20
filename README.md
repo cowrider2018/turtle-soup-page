@@ -61,6 +61,62 @@ self-chosen room name is effectively public and can be guessed (use a generated 
 isolation matters); and **vandalism cannot be rolled back** — there are no snapshots, containment
 is limited to `lock`, and recovery means moving to a new room name.
 
+## Hosting from a local agent
+
+`tools/host.mjs` joins a room as an ordinary client and plays the host: it posts the puzzle and
+answers each question with `T` / `F` / `I`. The judgement is made by a local Claude Code session
+(`.claude/skills/soup-host`); the CLI is transport plus enforcement only. Nothing in `worker/`
+changes and the Worker still makes no LLM calls — the model runs outside the request path.
+
+```bash
+npm run host -- init   <room> --soup soups/<room>.json
+npm run host -- wait   <room> --soup soups/<room>.json     # blocks up to 9 min, prints pending questions
+npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.json [--note "…"]
+npm run host -- reveal <room> <room> --soup soups/<room>.json
+```
+
+### Choosing the target site
+
+Every subcommand takes `--host <origin>`, which decides where the bot connects. It defaults to
+`http://127.0.0.1:8787`, the address `npm run dev` listens on, so nothing is needed while
+developing locally. Point it at the deployed site to host a real game:
+
+```bash
+npm run host -- init myroom --soup soups/myroom.json --host https://<your-domain>
+```
+
+`SOUP_HOST` sets the same thing for a whole shell, which is the practical way to run a session
+without repeating the flag on every call. `--host` wins when both are present.
+
+```bash
+export SOUP_HOST=https://<your-domain>       # bash
+$env:SOUP_HOST = 'https://<your-domain>'     # PowerShell
+
+npm run host -- wait myroom --soup soups/myroom.json
+```
+
+The scheme selects the transport: `https:` connects over `wss:`, anything else over `ws:`. The
+value is sent as the `Origin` header, which the Worker checks against the request host
+(`sameOrigin` in `worker/index.js`), so it must be the site's own origin — a mismatch is rejected
+with `403 origin` rather than silently downgraded.
+
+The soup file is `{ "surface": …, "bottom": …, "lives": 6 }` and lives in `soups/`, which is
+gitignored. Only `surface` is ever published; the room document is readable by everyone in the
+room, so the solution stays on the local disk until `reveal`.
+
+Room content is untrusted input in both directions — a player can type instructions into a question
+field. The defences are structural rather than prompt-based, so a fully hijacked model still cannot
+leak the solution:
+
+| Risk | Enforcement |
+|---|---|
+| Model coerced into revealing the solution | Answers are parsed against the `T`/`F`/`I` allow-list and must be non-empty; the leak budget is log₂3 bits per question, which is the game itself |
+| Free-text note used as the leak channel | A note is accepted only on a row where the player asked for a hint, and is rejected if it shares a 6-character run with the local solution |
+| Injection triggering the reveal | `reveal` is a separate operator command requiring the room name twice, and is kept out of the hosting loop |
+
+Because the document is memory-only, a room that empties out loses the puzzle. Passing `--soup` to
+`wait` and `answer` restores `surface` whenever the room comes back without it.
+
 ## Development
 
 ```bash
