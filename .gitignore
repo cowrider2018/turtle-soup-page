@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars
+
+# .claude 下只版控 skills，其餘是機器本地設定
+.claude/*
+!.claude/skills/

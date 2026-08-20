@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>海龜湯 · 詭案筆記</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<main class="alley">
+
+  <header class="sign">
+    <p class="eyebrow">Lateral · Soup · Log</p>
+    <h1>海龜<span class="dim">湯</span></h1>
+    <p class="tagline">問對問題，才撈得到真相</p>
+  </header>
+
+  <div class="stage">
+
+    <div class="col col-left">
+      <section class="panel p-quiz">
+        <div class="panel-head">
+          <h2 class="h-violet">提問紀錄</h2>
+        </div>
+        <ol class="qlist" id="qlist"></ol>
+        <p class="stash" id="stash"></p>
+      </section>
+    </div>
+
+    <div class="col col-right">
+      <section class="panel p-life">
+        <div class="panel-head">
+          <h2 class="h-cyan">生命</h2>
+        </div>
+        <div class="lifebar">
+          <div class="stepper">
+            <button id="minus" type="button" aria-label="減少生命">−</button>
+            <input id="count" class="count" type="text" inputmode="numeric" autocomplete="off"
+                   maxlength="3" value="6" aria-label="生命數，可直接輸入">
+            <button id="plus" type="button" aria-label="增加生命">+</button>
+          </div>
+          <div class="bulbs" id="bulbs" aria-hidden="true"></div>
+          <span class="tally" id="tally" aria-live="polite"></span>
+        </div>
+      </section>
+
+      <section class="panel p-surface">
+        <div class="panel-head">
+          <h2 class="h-cyan">湯麵</h2>
+        </div>
+        <textarea id="surface" maxlength="2000" placeholder="輸入謎題"></textarea>
+      </section>
+
+      <section class="panel p-bottom">
+        <div class="panel-head">
+          <h2 class="h-amber">湯底</h2>
+        </div>
+        <textarea id="bottom" maxlength="4000" placeholder="尚未解答"></textarea>
+      </section>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <button class="wipe" id="wipe" type="button">全部清空</button>
+  </div>
+
+</main>
+
+<div class="veil" id="veil" role="dialog" aria-modal="true" aria-labelledby="ctitle">
+  <div class="card">
+    <h3 id="ctitle"></h3>
+    <p id="ctext"></p>
+    <div class="acts" id="cacts"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

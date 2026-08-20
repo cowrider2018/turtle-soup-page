@@ -1,0 +1,15 @@
+{
+  "name": "turtle-soup-page",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "setup:kv": "wrangler kv namespace create CTRL",
+    "soup": "node tools/soup.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

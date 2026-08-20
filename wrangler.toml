@@ -1,0 +1,47 @@
+name = "turtle-soup-page"
+main = "worker/index.js"
+compatibility_date = "2025-05-01"
+
+# Every request is routed through the Worker first, which is the only way static responses can
+# carry the security headers (CSP, frame-ancestors, Referrer-Policy). See "Configuration notes"
+# in README.md for the request-allowance trade-off this implies.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+# Disable the built-in index.html rewrite and redirect. Any other value makes /index.html redirect
+# to /, which this Worker redirects to a new room name, producing a redirect loop. Routing is
+# decided entirely by the Worker.
+html_handling = "none"
+not_found_handling = "none"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+# SQLite-backed Durable Objects; the free plan supports only this storage backend.
+# Renaming either class later requires a `renamed_classes` migration.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
+
+# Used by administration: per-room locks, the site-wide freeze flag and the command queue.
+# Create the namespace once with `npm run setup:kv`, then replace REPLACE_ME with the id it
+# prints. Deployment fails until it is set, which is deliberate: without KV the administration
+# commands cannot function, and failing at deploy time is preferable to discovering in production
+# that a room cannot be locked.
+[[kv_namespaces]]
+binding = "CTRL"
+id = "REPLACE_ME"
+
+# When queued administration commands are executed: once a minute.
+# 1,440 invocations per day, roughly 1.4% of the free request allowance.
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true

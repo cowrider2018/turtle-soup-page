@@ -1,0 +1,419 @@
+/* 海龜湯 · 共編
+   前端只是伺服器文件的鏡子。上限一律以伺服器為準，這裡的檢查只是為了少送一趟往返。
+
+   紅線：遠端字串永不進 innerHTML。所有使用者內容只走 .value 與 .textContent，
+   儲存型 XSS 因此在結構上不存在，不依賴任何黑名單過濾。 */
+(function () {
+  'use strict';
+
+  const LIM = { livesMin: 1, livesMax: 300, rows: 300, q: 300, n: 200 };
+  const doc = { rev: 0, lives: 6, rows: [], surface: '', bottom: '' };
+
+  const $ = id => document.getElementById(id);
+  const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'), count = $('count'),
+        stash = $('stash'), surface = $('surface'), bottom = $('bottom'),
+        veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts');
+
+  const pad = n => String(n).padStart(2, '0');
+  // 用掉生命的條件：問了問題或收到回答。只寫註解不算。
+  const alive = r => !!(r && (r.q.trim() || r.a));
+  // 有任何內容（含註解），用來判斷收起來的列是否還存著東西。
+  const hasAny = r => !!(r && (r.q.trim() || r.a || r.n.trim()));
+
+  function row(i) {
+    while (doc.rows.length <= i) doc.rows.push({ q: '', a: '', n: '' });
+    return doc.rows[i];
+  }
+  function used() {
+    let n = 0;
+    for (let i = 0; i < doc.lives; i++) if (alive(doc.rows[i])) n++;
+    return n;
+  }
+  // 遠端更新不能蓋掉正在打字的欄位，否則字會被吃掉、游標會跳。
+  // 例外是清空與還原：那是全房一起重設，連正在打字的欄位也要跟著換掉。
+  function put(el, v, force) {
+    if (el && (force || document.activeElement !== el)) el.value = v;
+  }
+
+  /* ── 列的 DOM：增減用 ensureRows，內容用 paintRow，不整批重建 ── */
+
+  function makeRow(i) {
+    const li = document.createElement('li');
+    li.className = 'qrow';
+    li.dataset.i = i;
+
+    const num = document.createElement('span');
+    num.className = 'qnum';
+    num.textContent = pad(i + 1);
+
+    const q = document.createElement('input');
+    q.className = 'qtext';
+    q.type = 'text';
+    q.maxLength = LIM.q;
+    q.placeholder = '第 ' + (i + 1) + ' 個問題…';
+    q.setAttribute('aria-label', '第 ' + (i + 1) + ' 個問題');
+
+    const sel = document.createElement('span');
+    sel.className = 'sel';
+    const s = document.createElement('select');
+    s.setAttribute('aria-label', '第 ' + (i + 1) + ' 題的回答');
+    [['', '— 未答'], ['T', 'T 是'], ['F', 'F 否'], ['I', 'I 無關']].forEach(([v, t]) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = t;
+      s.appendChild(o);
+    });
+    sel.appendChild(s);
+
+    const n = document.createElement('input');
+    n.className = 'qnote';
+    n.type = 'text';
+    n.maxLength = LIM.n;
+    n.placeholder = '註解';
+    n.setAttribute('aria-label', '第 ' + (i + 1) + ' 題的註解');
+
+    li.append(num, q, sel, n);
+    return li;
+  }
+
+  function ensureRows() {
+    while (qlist.children.length < doc.lives) qlist.appendChild(makeRow(qlist.children.length));
+    while (qlist.children.length > doc.lives) qlist.removeChild(qlist.lastChild);
+  }
+
+  function paintRow(i, force) {
+    const li = qlist.children[i];
+    if (!li) return;
+    const r = row(i);
+    put(li.querySelector('.qtext'), r.q, force);
+    put(li.querySelector('.qnote'), r.n, force);
+    put(li.querySelector('select'), r.a, force);
+    li.querySelector('.sel').dataset.a = r.a;
+    li.classList.toggle('filled', alive(r));
+  }
+
+  const HEART = 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 '
+              + '3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 '
+              + '6.86-8.55 11.54L12 21.35z';
+
+  let announced = false;
+
+  function drawStatus() {
+    const u = used(), left = doc.lives - u;
+    put(count, String(doc.lives));
+    $('minus').disabled = doc.lives <= LIM.livesMin;
+    $('plus').disabled = doc.lives >= LIM.livesMax;
+
+    bulbs.textContent = '';
+    for (let i = 0; i < doc.lives; i++) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('class', 'bulb' + (i < u ? ' spent' : (left === 1 ? ' last' : '')));
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', HEART);
+      svg.appendChild(p);
+      bulbs.appendChild(svg);
+    }
+
+    tally.className = 'tally' + (left === 0 ? ' out' : '');
+    tally.textContent = '';
+    tally.append('剩 ');
+    const b = document.createElement('b'); b.textContent = String(left);
+    tally.append(b, ' / ' + doc.lives);
+
+    const hidden = doc.rows.slice(doc.lives).filter(hasAny).length;
+    stash.textContent = hidden ? '另有 ' + hidden + ' 列被收起，內容還在，加回生命就會出現。' : '';
+
+    // 正在輸入生命數時先不打斷，等離開欄位、數字確定了再提示
+    if (left === 0 && !announced && document.activeElement !== count) { announced = true; outOfLives(); }
+    if (left > 0) announced = false;
+  }
+
+  function render(force) {
+    for (let i = 0; i < doc.lives; i++) row(i);
+    ensureRows();
+    for (let i = 0; i < doc.lives; i++) paintRow(i, force);
+    put(surface, doc.surface, force);
+    put(bottom, doc.bottom, force);
+    drawStatus();
+  }
+
+  /* ── 連線 ────────────────────────── */
+
+  // 房號就是網址後綴。沒帶或格式不合的，伺服器已經先 302 到一個新房號了。
+  const ROOM_RE = /^[\p{L}\p{N}\p{M}_-]{2,64}$/u;
+  let RID = '';
+  try { RID = decodeURIComponent(location.pathname.slice(1)).normalize('NFC'); } catch { RID = ''; }
+  let ws = null, backoff = 1000, everOpen = false, dead = false, tries = 0;
+
+  function connect() {
+    if (dead) return;
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://')
+      + location.host + '/ws?r=' + encodeURIComponent(RID));
+
+    tries++;
+    ws.onopen = () => { everOpen = true; tries = 0; backoff = 1000; flush(); };
+    ws.onmessage = e => {
+      let m;
+      try { m = JSON.parse(e.data); } catch { return; }
+      handle(m);
+    };
+    ws.onclose = () => {
+      // 從沒連上過就連續失敗：多半是開房次數達上限或服務異常，別無限重試
+      if (!everOpen && tries >= 3) {
+        return fatal('連不上這個房間',
+          '可能是短時間內開了太多房而被限流，或服務暫時異常。稍後重新整理，或換一個已經存在的房號。');
+      }
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 15000);
+    };
+    ws.onerror = () => { /* 收尾一律交給 onclose */ };
+  }
+
+  function handle(m) {
+    if (m.t === 'sync') {
+      // hollow＝伺服器休眠醒來、手上是空的。手上有內容就別讓空文件蓋掉，反過來餵回去。
+      if (m.hollow && hasContent(doc)) { sendSeed(); return; }
+      doc.rev = m.doc.rev;
+      doc.lives = m.doc.lives;
+      doc.rows = m.doc.rows.map(r => ({ q: r.q, a: r.a, n: r.n }));
+      doc.surface = m.doc.surface;
+      doc.bottom = m.doc.bottom;
+      // why = wipe：全房重設，正在打字的欄位也一併覆蓋
+      render(!!m.why);
+      if (m.why) pending.clear();
+      keep();
+      return;
+    }
+    if (m.t === 'need') { sendSeed(); return; }
+    if (m.t === 'patch') {
+      // rev 不連續代表漏了訊息，別自己猜，直接要一份全量
+      if (m.rev !== doc.rev + 1) { send({ t: 'resync' }); return; }
+      doc.rev = m.rev;
+      applyOps(m.ops);
+      keep();
+      return;
+    }
+    if (m.t === 'err') { onErr(m.code); return; }
+  }
+
+  /* ── 伺服器不落地，所以這一份鏡像就是備份 ── */
+
+  function hasContent(d) {
+    return !!(d && (d.surface || d.bottom || d.rows.some(r => r.q || r.a || r.n)));
+  }
+
+  // 只有伺服器說它空了才餵回去，所以不會拿舊內容去蓋掉新的
+  function sendSeed() {
+    const src = hasContent(doc) ? doc : backup;
+    if (!hasContent(src)) return;
+    if (send({ t: 'seed', doc: src })) flush();   // 順手補送斷線期間累積的修改
+  }
+
+  // 同一個分頁重整也救得回來。用 sessionStorage 而不是 localStorage：
+  // 分頁關掉就跟著消失，不會拿隔夜的內容去汙染同名的新房間。
+  const KEY = 'soup:' + RID;
+  let keepTimer = null;
+  function keep() {
+    if (keepTimer) return;
+    keepTimer = setTimeout(() => {
+      keepTimer = null;
+      try { sessionStorage.setItem(KEY, JSON.stringify(doc)); } catch { /* 滿了就算了 */ }
+    }, 1000);
+  }
+
+  // 只當備援，不直接畫到畫面上 —— 畫面永遠以伺服器那份為準
+  const backup = (() => {
+    try {
+      const d = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+      if (!d || !Array.isArray(d.rows) || !hasContent(d)) return null;
+      return {
+        rev: d.rev | 0,
+        lives: d.lives,
+        rows: d.rows.map(r => ({ q: r.q || '', a: r.a || '', n: r.n || '' })),
+        surface: d.surface || '',
+        bottom: d.bottom || '',
+      };
+    } catch { return null; }
+  })();
+
+  function applyOps(ops) {
+    let structural = false;
+    for (const op of ops) {
+      if (op.p === 'lives') { doc.lives = op.v; structural = true; continue; }
+      if (op.p === 'surface') { doc.surface = op.v; put(surface, op.v); continue; }
+      if (op.p === 'bottom') { doc.bottom = op.v; put(bottom, op.v); continue; }
+      const m = /^rows\.(\d{1,3})\.(q|a|n)$/.exec(op.p);
+      if (!m) continue;
+      const i = Number(m[1]);
+      row(i)[m[2]] = op.v;
+      paintRow(i);
+    }
+    if (structural) render(); else drawStatus();
+  }
+
+  // 同一種錯誤 60 秒內只提示一次，否則邊打字邊彈視窗會沒完沒了
+  const shown = new Map();
+  function once(code, fn) {
+    const now = Date.now();
+    if (shown.get(code) > now - 60000) return;
+    shown.set(code, now);
+    fn();
+  }
+
+  function onErr(code) {
+    if (code === 'rate_limited') return;                        // 客戶端已 debounce，偶發即可忽略
+    if (code === 'locked') {
+      return once(code, () => note('這一鍋被鎖住了',
+        '目前是唯讀狀態，改不動了。看得到的內容還是最新的。'));
+    }
+    if (code === 'frozen') {
+      return once(code, () => note('暫停服務中', '服務目前停止寫入，請稍後再試。'));
+    }
+    if (code === 'doc_too_big' || code === 'too_many_rows') {
+      return once(code, () => note('這鍋湯已經到上限了', '伺服器拒絕了剛才的修改，請先精簡內容。'));
+    }
+    once(code, () => note('這一筆沒存進去',
+      '伺服器退回了剛才的修改（' + code + '）。重新整理可取得最新內容。'));
+  }
+
+  /* ── 送出：合併同一欄位的連續輸入，350ms 一批 ── */
+
+  const pending = new Map();
+  let timer = null;
+
+  function send(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(msg)); return true; }
+    return false;
+  }
+  function queue(p, v) {
+    pending.set(p, v);
+    if (!timer) timer = setTimeout(flush, 350);
+    keep();
+  }
+  function flush() {
+    timer = null;
+    if (!pending.size) return;
+    const ops = [...pending].map(([p, v]) => ({ p, v }));
+    if (!send({ t: 'patch', ops })) return;   // 斷線時留在 pending，重連的 onopen 會再送
+    pending.clear();
+  }
+
+  /* ── 本地編輯 ────────────────────── */
+
+  qlist.addEventListener('input', e => {
+    const li = e.target.closest('.qrow');
+    if (!li) return;
+    const i = Number(li.dataset.i), r = row(i);
+    if (e.target.classList.contains('qtext')) {
+      r.q = e.target.value;
+      queue('rows.' + i + '.q', r.q);
+      li.classList.toggle('filled', alive(r));
+      drawStatus();
+    } else if (e.target.classList.contains('qnote')) {
+      r.n = e.target.value;
+      queue('rows.' + i + '.n', r.n);
+    }
+  });
+
+  qlist.addEventListener('change', e => {
+    if (e.target.tagName !== 'SELECT') return;
+    const li = e.target.closest('.qrow');
+    const i = Number(li.dataset.i), r = row(i);
+    r.a = e.target.value;
+    li.querySelector('.sel').dataset.a = r.a;
+    li.classList.toggle('filled', alive(r));
+    queue('rows.' + i + '.a', r.a);
+    drawStatus();
+  });
+
+  surface.addEventListener('input', () => { doc.surface = surface.value; queue('surface', doc.surface); });
+  bottom.addEventListener('input', () => { doc.bottom = bottom.value; queue('bottom', doc.bottom); });
+
+  function setLives(n) {
+    const v = Math.min(LIM.livesMax, Math.max(LIM.livesMin, n));
+    if (v === doc.lives) return;
+    doc.lives = v;
+    queue('lives', v);
+    render();
+  }
+  $('minus').onclick = () => setLives(doc.lives - 1);
+  $('plus').onclick = () => setLives(doc.lives + 1);
+
+  count.addEventListener('input', () => {
+    const digits = count.value.replace(/\D/g, '');
+    if (digits !== count.value) count.value = digits;
+    const n = parseInt(digits, 10);
+    // 打到一半的數字（空的、0、超出上限）先不動，等離開欄位再收斂
+    if (!isNaN(n) && n >= LIM.livesMin && n <= LIM.livesMax) setLives(n);
+  });
+  count.addEventListener('blur', () => {
+    const n = parseInt(count.value, 10);
+    if (!isNaN(n)) setLives(n);
+    count.value = String(doc.lives);
+    drawStatus();   // 離開欄位才判斷生命是否已經用光
+  });
+  count.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); count.blur(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setLives(doc.lives + 1); count.value = String(doc.lives); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setLives(doc.lives - 1); count.value = String(doc.lives); }
+  });
+  count.addEventListener('focus', () => count.select());
+
+  /* ── 提示視窗 ────────────────────── */
+
+  let lastFocus = null;
+  function ask(title, text, actions, locked) {
+    lastFocus = document.activeElement;
+    ctitle.textContent = title;
+    ctext.textContent = text;
+    cacts.textContent = '';
+    veil.dataset.locked = locked ? '1' : '';
+    actions.forEach(a => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = a.label;
+      if (a.danger) btn.className = 'danger';
+      btn.onclick = () => { close(); a.run && a.run(); };
+      cacts.appendChild(btn);
+    });
+    veil.classList.add('open');
+    if (cacts.firstChild) cacts.firstChild.focus();
+  }
+  function close() {
+    if (veil.dataset.locked) return;
+    veil.classList.remove('open');
+    if (lastFocus) lastFocus.focus();
+  }
+  veil.addEventListener('click', e => { if (e.target === veil) close(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && veil.classList.contains('open')) close();
+  });
+
+  const note = (t, x) => ask(t, x, [{ label: '知道了' }]);
+  function fatal(t, x) { dead = true; if (ws) ws.close(); ask(t, x, [], true); }
+
+  function outOfLives() {
+    ask('燈全滅了', '生命已經用完。', [
+      { label: '加開一條生命', run: () => setLives(doc.lives + 1) },
+      { label: '知道了' },
+    ]);
+  }
+
+  $('wipe').onclick = () => {
+    const n = used();
+    ask('要清空整鍋湯嗎',
+      '湯麵、湯底' + (n ? '和 ' + n + ' 則提問' : '') + '都會消失，房內所有人都會被清空。',
+      [
+        { label: '全部清空', danger: true, run: () => send({ t: 'wipe' }) },
+        { label: '留著' },
+      ]);
+  };
+
+  render();
+  if (ROOM_RE.test(RID)) {
+    connect();
+  } else {
+    // 正常走不到這裡（伺服器會先導向）；直接讓伺服器發一個新房號
+    location.replace('/');
+  }
+})();
