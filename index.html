@@ -22,6 +22,9 @@
   --serif:"Noto Serif TC","Songti TC","PingFang TC","Microsoft JhengHei",serif;
   --sans:"PingFang TC","Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif;
   --mono:"Share Tech Mono","Courier New",monospace;
+  /* 每個區塊的主色，角落光與漫光都吃這一組 */
+  --accent:var(--cyan);
+  --accent-soft:rgba(61,240,255,.08);
   --bulb:30px;   /* 愛心的上限；格子比它寬時就置中，窄時愛心跟著縮 */
 }
 
@@ -95,12 +98,32 @@ h1 .dim{
 
 /* ── 區塊 ─────────────────────── */
 .panel{
-  position:relative;background:var(--panel);
+  position:relative;
+  /* 底色之上再壓一層從左上角灑進來的漫光，方塊才有光源方向 */
+  background:radial-gradient(72% 58% at 0% 0%, var(--accent-soft), transparent 70%), var(--panel);
   border:1px solid var(--line);border-radius:2px;
   padding:clamp(12px,2.2vw,18px);
   backdrop-filter:blur(2px);
   box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 18px 50px rgba(0,0,0,.55);
 }
+.p-quiz{--accent:var(--violet);--accent-soft:rgba(160,107,255,.10)}
+.p-bottom{--accent:var(--amber);--accent-soft:rgba(255,176,58,.09)}
+
+/* 四角的光框：上下各用一個 pseudo 畫兩個角，四層漸層就是四段光條。
+   drop-shadow 吃的是這幾段光條本身的形狀，所以光暈只沿著角落散開。 */
+.panel::before,.panel::after,.card::before,.card::after{
+  content:"";position:absolute;left:-1px;right:-1px;height:15px;
+  pointer-events:none;background-repeat:no-repeat;
+  background-image:
+    linear-gradient(var(--accent),var(--accent)),linear-gradient(var(--accent),var(--accent)),
+    linear-gradient(var(--accent),var(--accent)),linear-gradient(var(--accent),var(--accent));
+  background-size:15px 1px,1px 15px,15px 1px,1px 15px;
+  filter:drop-shadow(0 0 4px var(--accent));
+  opacity:.5;
+}
+.panel::before,.card::before{top:-1px;background-position:left top,left top,right top,right top}
+.panel::after,.card::after{bottom:-1px;background-position:left bottom,left bottom,right bottom,right bottom}
+
 .stage{
   display:grid;
   grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);
@@ -112,8 +135,15 @@ h1 .dim{
 .p-bottom{flex:1;min-height:0;display:flex;flex-direction:column}
 .p-bottom textarea{flex:1}
 .panel-head{
+  position:relative;
   display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
   margin-bottom:10px;
+}
+/* 標題底下一條往右淡出的髮絲線 */
+.panel-head::after{
+  content:"";position:absolute;left:0;right:0;bottom:-4px;height:1px;
+  background:linear-gradient(90deg,var(--accent),transparent 62%);
+  opacity:.3;
 }
 h2{
   font-family:var(--serif);font-weight:900;font-size:1.1rem;
@@ -138,7 +168,7 @@ h2{
   transition:color .35s,filter .35s;
 }
 .bulb path{fill:currentColor}
-.bulb.spent{color:#241f33;filter:none}
+.bulb.spent{color:#2c1d2c;filter:drop-shadow(0 0 3px rgba(255,45,126,.12))}
 .bulb.last{animation:dying 1.6s infinite}
 @keyframes dying{0%,100%{opacity:1}42%{opacity:.25}46%{opacity:1}58%{opacity:.2}62%{opacity:1}}
 .tally{
@@ -261,6 +291,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 .veil.open{display:flex;animation:fadein .25s ease}
 @keyframes fadein{from{opacity:0}to{opacity:1}}
 .card{
+  --accent:var(--rose);
+  position:relative;
   max-width:400px;width:100%;background:#0d0b16;
   border:1px solid var(--line);border-radius:2px;
   padding:32px 28px 26px;text-align:center;
