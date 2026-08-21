@@ -8,7 +8,8 @@
     "tail": "wrangler tail",
     "setup:kv": "wrangler kv namespace create CTRL",
     "soup": "node tools/soup.mjs",
-    "host": "node tools/host.mjs"
+    "host": "node tools/host.mjs",
+    "pick": "node tools/soup-pick.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

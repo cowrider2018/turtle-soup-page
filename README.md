@@ -75,6 +75,73 @@ npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.json [--note "�
 npm run host -- reveal <room> <room> --soup soups/<room>.json
 ```
 
+### The pantry
+
+`tools/soup-pick.mjs` keeps a local stock of puzzles so that posting one costs no model calls at
+all — the quota is spent harvesting off-peak and on the hosting loop, never mid-game.
+
+```bash
+npm run pick -- check  <draft.json>       # facts + element-map validation, no model calls
+npm run pick -- add    <draft.json>       # store, obscured
+npm run pick -- reject <draft.json> --code E_XXX --why "…"
+npm run pick -- list                      # deliberately prints no puzzle text
+npm run pick -- take   <room>             # move one unserved soup to soups/<room>.veil
+npm run pick -- peek   <hash> <hash>      # look at a solution on purpose; hash typed twice
+npm run pick -- scrub  [report.txt]       # refuse a report that quotes the puzzles;
+                                          #   with no argument, sweep the repo for plaintext
+npm run pick -- reindex                   # rebuild .seen.json from the files
+```
+
+`.veil` files are the source of truth and `.seen.json` is derived from them, so several harvest
+agents can run at once: they may clobber each other's bookkeeping, never each other's soups, and
+`reindex` puts the ledger back.
+
+Harvesting is `.claude/skills/soup-harvest`: search, extract verbatim, an injection gate, then one
+lenient sighted check that rejects only what is plainly mis-scraped (`E_NO_BOTTOM`). Wordplay, gore,
+murder and well-known classics all pass — filtering those is the player's call, not ours.
+
+Nothing judges a surface for giving too much away on its own, because there is no way to know how
+coy the author meant it to be. What is worth catching is the variant of a circulated puzzle whose
+surface has been padded with the solution's own detail, and that only shows up against a sibling.
+So `add` looks for a soup already in the pantry whose solution overlaps this one's, and when it
+finds one, keeps whichever surface borrows less from its solution and files the other under
+`E_HINTED`. Same solution text with a different surface replaces in place; a genuine second copy is
+`E_DUPE`. Collecting several versions of one puzzle is therefore useful, not wasted work.
+
+### Why the pantry is obscured
+
+The developer here is also a player. `tools/veil.mjs` XOR-masks and base64s every stored file so an
+editor, a `grep` or an `ls` cannot spoil anything by accident. The key sits in version control on
+purpose: the threat model is a slip of the hand, not an attacker.
+
+Obscuring the files is only half of it. The other half is that the hosting loop runs in a subagent,
+so the solution never enters the main conversation where the user would read it. `brief` and `peek`
+are the two deliberate ways back in.
+
+### Rules the checker does not hold
+
+Building this made one thing plain. Harvest and hosting run on small models, and a small model
+delivers what the checker demands and quietly drops the rest. Three rules lived in skill prose;
+all three were skipped. Hint sentences collapsed to one shared template across every soup, reach
+words degenerated to generic ones that mark a slot touched on any idle question, and one agent
+listed the puzzles' anchor words straight into its own report.
+
+A fourth was worse: one run left ten scratch scripts behind in `tools/`, every one with soup text
+hardcoded into it — plaintext solutions sitting in the working tree, which is the exact thing the
+veil exists to prevent.
+
+Each is now a check — a slot with anchors owes a sentence that uses one, reach words owe a term
+from that soup's own solution, `scrub <file>` compares a report against the pantry before it is
+handed over, and bare `scrub` sweeps the repo for files carrying puzzle text. That is the argument
+for putting judgement in `soup-pick.mjs` rather than in a prompt: not only that a checker is more
+reliable, but that it decides whether the rule happens at all.
+
+The two thresholds differ because the jobs do. Reports are short and deliberate, so three
+characters of overlap is worth flagging and the odd false positive costs a reword. Sweeping source
+files at that length flags everything, since ordinary Chinese prose collides constantly; embedded
+soup text instead shows up as long verbatim runs, so the sweep matches ten and comes back clean on
+a repo that is actually clean.
+
 ### Choosing the target site
 
 Every subcommand takes `--host <origin>`, which decides where the bot connects. It defaults to
