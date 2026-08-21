@@ -16,7 +16,6 @@
   <header class="sign">
     <p class="eyebrow">Lateral · Soup · Log</p>
     <h1>海龜<span class="dim">湯</span></h1>
-    <p class="tagline">問對問題，才撈得到真相</p>
   </header>
 
   <div class="stage">
@@ -37,14 +36,8 @@
           <h2 class="h-cyan">生命</h2>
         </div>
         <div class="lifebar">
-          <div class="stepper">
-            <button id="minus" type="button" aria-label="減少生命">−</button>
-            <input id="count" class="count" type="text" inputmode="numeric" autocomplete="off"
-                   maxlength="3" value="6" aria-label="生命數，可直接輸入">
-            <button id="plus" type="button" aria-label="增加生命">+</button>
-          </div>
           <div class="bulbs" id="bulbs" aria-hidden="true"></div>
-          <span class="tally" id="tally" aria-live="polite"></span>
+          <span class="tally" id="tally"><span aria-live="polite">剩 <b id="left">6</b></span> / <span class="denom"><span class="ghost" id="ghost" aria-hidden="true">6</span><input id="count" class="count" type="text" inputmode="numeric" autocomplete="off" maxlength="3" value="6" aria-label="生命總數，可直接輸入"><span class="nudge"><button id="plus" type="button" aria-label="增加生命">▴</button><button id="minus" type="button" aria-label="減少生命">▾</button></span></span></span>
         </div>
       </section>
 

@@ -11,6 +11,7 @@
 
   const $ = id => document.getElementById(id);
   const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'), count = $('count'),
+        leftNum = $('left'), ghost = $('ghost'),
         stash = $('stash'), surface = $('surface'), bottom = $('bottom'),
         veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts');
 
@@ -46,9 +47,9 @@
     num.className = 'qnum';
     num.textContent = pad(i + 1);
 
-    const q = document.createElement('input');
+    const q = document.createElement('textarea');
     q.className = 'qtext';
-    q.type = 'text';
+    q.rows = 1;
     q.maxLength = LIM.q;
     q.placeholder = '第 ' + (i + 1) + ' 個問題…';
     q.setAttribute('aria-label', '第 ' + (i + 1) + ' 個問題');
@@ -64,9 +65,9 @@
     });
     sel.appendChild(s);
 
-    const n = document.createElement('input');
+    const n = document.createElement('textarea');
     n.className = 'qnote';
-    n.type = 'text';
+    n.rows = 1;
     n.maxLength = LIM.n;
     n.placeholder = '註解';
     n.setAttribute('aria-label', '第 ' + (i + 1) + ' 題的註解');
@@ -84,11 +85,72 @@
     const li = qlist.children[i];
     if (!li) return;
     const r = row(i);
-    put(li.querySelector('.qtext'), r.q, force);
-    put(li.querySelector('.qnote'), r.n, force);
+    const q = li.querySelector('.qtext'), n = li.querySelector('.qnote');
+    put(q, r.q, force);
+    put(n, r.n, force);
     put(li.querySelector('select'), r.a, force);
     li.querySelector('.sel').dataset.a = r.a;
     li.classList.toggle('filled', alive(r));
+    grow(q); grow(n);
+  }
+
+  /* ── 輸入框跟著內容長高 ──────────────
+     長問題要看得到全文，短問題不該佔一整塊，所以高度由內容決定。
+     寫的是 min-height 不是 height：湯底那格還要能被 flex:1 撐滿右欄。 */
+
+  // 量一次就強迫瀏覽器重排一次，300 列時很傷，所以內容沒變就不重量。
+  const measured = new WeakMap();
+  const floor = new WeakMap();
+  let epoch = 0;   // 視窗寬度變了，換行位置就變了，之前量的一律作廢
+
+  function grow(el) {
+    if (!el) return;
+    const key = epoch + '|' + el.value;
+    if (measured.get(el) === key) return;
+    measured.set(el, key);
+    if (!floor.has(el)) floor.set(el, parseFloat(getComputedStyle(el).minHeight) || 0);
+
+    const st = el.style;
+    st.minHeight = '0px';
+    st.height = 'auto';
+    // 不先解掉 flex:1 與 grid 的 stretch，量到的會是被撐開的高度，而不是內容高度
+    st.flex = '0 0 auto';
+    st.alignSelf = 'start';
+    const h = el.scrollHeight + el.offsetHeight - el.clientHeight;   // 加回上下框線
+    st.alignSelf = '';
+    st.flex = '';
+    st.height = '';
+    st.minHeight = Math.max(h, floor.get(el)) + 'px';
+  }
+
+  function growAll() {
+    grow(surface); grow(bottom);
+    for (const li of qlist.children) {
+      grow(li.querySelector('.qtext'));
+      grow(li.querySelector('.qnote'));
+    }
+  }
+
+  // 盯的是版面寬度而不是視窗：內容一長，捲軸就出現，可用寬度少掉十幾像素、
+  // 換行位置整個變掉，而捲軸的出現並不會觸發 resize。不重量的話舊的高度就會切掉字。
+  let lastW = 0, refitting = false;
+  function refit() {
+    if (refitting) return;
+    refitting = true;
+    requestAnimationFrame(() => {
+      refitting = false;
+      const w = document.documentElement.clientWidth;
+      if (w === lastW) return;
+      lastW = w;
+      epoch++;
+      growAll();
+    });
+  }
+  window.addEventListener('resize', refit);
+  if (window.ResizeObserver) new ResizeObserver(refit).observe(document.documentElement);
+  // 字體是後來才載入的，載入前量到的是備援字體的高度
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => { epoch++; growAll(); sizeCount(); });
   }
 
   const HEART = 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 '
@@ -97,9 +159,17 @@
 
   let announced = false;
 
+  // 分母是輸入框，沒在編輯時要跟純文字分不出來，所以寬度得剛好等於那幾個數字。
+  // 用一個同樣字體、同樣字距的隱形分身去量，才不會被字距或字體換行為影響。
+  function sizeCount() {
+    ghost.textContent = count.value || '0';
+    count.style.width = ghost.getBoundingClientRect().width + 'px';
+  }
+
   function drawStatus() {
     const u = used(), left = doc.lives - u;
     put(count, String(doc.lives));
+    sizeCount();
     $('minus').disabled = doc.lives <= LIM.livesMin;
     $('plus').disabled = doc.lives >= LIM.livesMax;
 
@@ -114,11 +184,9 @@
       bulbs.appendChild(svg);
     }
 
+    // 這一段不重建，分母的輸入框正在裡面，重建會把游標踢掉
     tally.className = 'tally' + (left === 0 ? ' out' : '');
-    tally.textContent = '';
-    tally.append('剩 ');
-    const b = document.createElement('b'); b.textContent = String(left);
-    tally.append(b, ' / ' + doc.lives);
+    leftNum.textContent = String(left);
 
     const hidden = doc.rows.slice(doc.lives).filter(hasAny).length;
     stash.textContent = hidden ? '另有 ' + hidden + ' 列被收起，內容還在，加回生命就會出現。' : '';
@@ -134,6 +202,7 @@
     for (let i = 0; i < doc.lives; i++) paintRow(i, force);
     put(surface, doc.surface, force);
     put(bottom, doc.bottom, force);
+    grow(surface); grow(bottom);
     drawStatus();
   }
 
@@ -241,8 +310,8 @@
     let structural = false;
     for (const op of ops) {
       if (op.p === 'lives') { doc.lives = op.v; structural = true; continue; }
-      if (op.p === 'surface') { doc.surface = op.v; put(surface, op.v); continue; }
-      if (op.p === 'bottom') { doc.bottom = op.v; put(bottom, op.v); continue; }
+      if (op.p === 'surface') { doc.surface = op.v; put(surface, op.v); grow(surface); continue; }
+      if (op.p === 'bottom') { doc.bottom = op.v; put(bottom, op.v); grow(bottom); continue; }
       const m = /^rows\.(\d{1,3})\.(q|a|n)$/.exec(op.p);
       if (!m) continue;
       const i = Number(m[1]);
@@ -323,6 +392,7 @@
     const li = e.target.closest('.qrow');
     if (!li) return;
     if (!e.target.classList.contains('qtext') && !e.target.classList.contains('qnote')) return;
+    grow(e.target);
     const r = row(Number(li.dataset.i));
     const typing = li.querySelector('.qtext').value;
     li.classList.toggle('filled', !!(typing.trim() || r.a));
@@ -365,8 +435,8 @@
     drawStatus();
   });
 
-  surface.addEventListener('input', () => { doc.surface = surface.value; queue('surface', doc.surface); });
-  bottom.addEventListener('input', () => { doc.bottom = bottom.value; queue('bottom', doc.bottom); });
+  surface.addEventListener('input', () => { grow(surface); doc.surface = surface.value; queue('surface', doc.surface); });
+  bottom.addEventListener('input', () => { grow(bottom); doc.bottom = bottom.value; queue('bottom', doc.bottom); });
 
   function setLives(n) {
     const v = Math.min(LIM.livesMax, Math.max(LIM.livesMin, n));
@@ -375,12 +445,20 @@
     queue('lives', v);
     render();
   }
-  $('minus').onclick = () => setLives(doc.lives - 1);
-  $('plus').onclick = () => setLives(doc.lives + 1);
+  // 上下鍵與鍵盤共用。欄位正在編輯時 put() 不會覆蓋它，所以這裡要自己補上
+  // 值與寬度，不然 9 加到 10 時分母只有一位數寬，第二位就看不見了。
+  function bump(d) {
+    setLives(doc.lives + d);
+    count.value = String(doc.lives);
+    sizeCount();
+  }
+  $('minus').onclick = () => bump(-1);
+  $('plus').onclick = () => bump(1);
 
   count.addEventListener('input', () => {
     const digits = count.value.replace(/\D/g, '');
     if (digits !== count.value) count.value = digits;
+    sizeCount();
     const n = parseInt(digits, 10);
     // 打到一半的數字（空的、0、超出上限）先不動，等離開欄位再收斂
     if (!isNaN(n) && n >= LIM.livesMin && n <= LIM.livesMax) setLives(n);
@@ -389,12 +467,13 @@
     const n = parseInt(count.value, 10);
     if (!isNaN(n)) setLives(n);
     count.value = String(doc.lives);
+    sizeCount();
     drawStatus();   // 離開欄位才判斷生命是否已經用光
   });
   count.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); count.blur(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setLives(doc.lives + 1); count.value = String(doc.lives); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); setLives(doc.lives - 1); count.value = String(doc.lives); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); bump(1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); bump(-1); }
   });
   count.addEventListener('focus', () => count.select());
 

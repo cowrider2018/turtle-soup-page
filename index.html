@@ -22,6 +22,7 @@
   --serif:"Noto Serif TC","Songti TC","PingFang TC","Microsoft JhengHei",serif;
   --sans:"PingFang TC","Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif;
   --mono:"Share Tech Mono","Courier New",monospace;
+  --bulb:30px;   /* 愛心的上限；格子比它寬時就置中，窄時愛心跟著縮 */
 }
 
 *{box-sizing:border-box}
@@ -53,34 +54,30 @@ body::after{
 }
 @keyframes drift{from{transform:translate3d(-1.5%,-1%,0) scale(1.02)}to{transform:translate3d(1.5%,1.5%,0) scale(1.06)}}
 
-.alley{max-width:1220px;margin:0 auto;padding:clamp(28px,6vw,64px) clamp(16px,4vw,32px) 80px}
+.alley{max-width:1220px;margin:0 auto;padding:clamp(14px,2.4vw,24px) clamp(12px,2.4vw,22px) clamp(18px,3vw,30px)}
 
 /* ── 招牌 ─────────────────────── */
-.sign{text-align:center;margin-bottom:clamp(30px,6vw,52px)}
+.sign{text-align:center;margin-bottom:clamp(14px,2.6vw,22px)}
 .eyebrow{
-  font-family:var(--mono);font-size:.72rem;letter-spacing:.42em;
-  color:var(--cyan);text-transform:uppercase;margin:0 0 14px;
+  font-family:var(--mono);font-size:.62rem;letter-spacing:.38em;
+  color:var(--cyan);text-transform:uppercase;margin:0 0 6px;
   text-shadow:0 0 8px rgba(61,240,255,.8);padding-left:.42em;
 }
 h1{
   font-family:var(--serif);font-weight:900;
-  font-size:clamp(3.2rem,15vw,6rem);
-  letter-spacing:.16em;margin:0;padding-left:.16em;
+  font-size:clamp(2rem,7vw,3.1rem);
+  letter-spacing:.16em;margin:0;padding-left:.16em;line-height:1.15;
   color:#fff2f7;
   text-shadow:
     0 0 4px #fff,
-    0 0 12px var(--rose),
-    0 0 30px var(--rose),
-    0 0 70px rgba(255,45,126,.7),
-    0 0 120px rgba(255,45,126,.35);
+    0 0 10px var(--rose),
+    0 0 24px var(--rose),
+    0 0 52px rgba(255,45,126,.65),
+    0 0 90px rgba(255,45,126,.3);
   animation:ignite 4.5s 1 both, hum 5s 4.5s ease-in-out infinite;
 }
 h1 .dim{
   animation:deadtube 7s 5s infinite;
-}
-.tagline{
-  font-family:var(--serif);font-size:.95rem;letter-spacing:.3em;
-  color:var(--muted);margin:16px 0 0;padding-left:.3em;
 }
 @keyframes ignite{
   0%,8%{opacity:.15}9%{opacity:.9}11%{opacity:.2}
@@ -100,27 +97,27 @@ h1 .dim{
 .panel{
   position:relative;background:var(--panel);
   border:1px solid var(--line);border-radius:2px;
-  padding:clamp(18px,4vw,26px);
+  padding:clamp(12px,2.2vw,18px);
   backdrop-filter:blur(2px);
   box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 18px 50px rgba(0,0,0,.55);
 }
 .stage{
   display:grid;
   grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);
-  gap:22px;align-items:stretch;
+  gap:14px;align-items:stretch;
 }
-.col{display:flex;flex-direction:column;gap:22px}
+.col{display:flex;flex-direction:column;gap:14px}
 /* 兩欄等高：提問卡吃掉左欄多餘空間，湯底吃掉右欄多餘空間 */
 .p-quiz{flex:1;min-height:0}
 .p-bottom{flex:1;min-height:0;display:flex;flex-direction:column}
 .p-bottom textarea{flex:1}
 .panel-head{
-  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
-  margin-bottom:16px;
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  margin-bottom:10px;
 }
 h2{
-  font-family:var(--serif);font-weight:900;font-size:1.28rem;
-  letter-spacing:.22em;margin:0;padding-left:.22em;
+  font-family:var(--serif);font-weight:900;font-size:1.1rem;
+  letter-spacing:.2em;margin:0;padding-left:.2em;
 }
 .h-cyan{color:#e8fdff;text-shadow:0 0 6px var(--cyan),0 0 22px rgba(61,240,255,.65)}
 .h-violet{color:#f3ecff;text-shadow:0 0 6px var(--violet),0 0 22px rgba(160,107,255,.6)}
@@ -128,35 +125,16 @@ h2{
 .hint{font-family:var(--mono);font-size:.7rem;letter-spacing:.16em;color:var(--muted)}
 
 /* ── 生命 ─────────────────────── */
-.lifebar{display:flex;align-items:center;gap:12px 16px;flex-wrap:wrap}
-.stepper{display:flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:2px}
-.stepper button{
-  font-family:var(--mono);font-size:1.15rem;line-height:1;
-  width:38px;height:38px;background:transparent;color:var(--cyan);
-  border:0;cursor:pointer;transition:.15s;
-}
-.stepper button:hover:not(:disabled){background:rgba(61,240,255,.12);text-shadow:0 0 10px var(--cyan)}
-.stepper button:disabled{color:#3a3552;cursor:not-allowed}
-input.count{
-  font-family:var(--mono);font-size:1.35rem;line-height:1;
-  width:62px;padding:0;text-align:center;
-  background:transparent;border:0;border-bottom:1px solid transparent;border-radius:0;
-  color:#eafcff;text-shadow:0 0 10px var(--cyan);
-  cursor:text;transition:border-color .2s;
-}
-input.count:hover{border-bottom-color:rgba(61,240,255,.35)}
-input.count:focus{
-  outline:none;box-shadow:none;
-  border-bottom-color:var(--cyan);
-  text-shadow:0 0 14px var(--cyan),0 0 30px rgba(61,240,255,.6);
-}
+.lifebar{display:block}
 .bulbs{
-  display:grid;grid-template-columns:repeat(10,max-content);
-  gap:7px;justify-content:start;
+  /* 一排十顆，十格平分整條的寬度，最後一顆剛好落在右邊界 */
+  display:grid;grid-template-columns:repeat(10,minmax(0,1fr));
+  gap:6px;
 }
 .bulb{
-  width:26px;height:26px;display:block;color:var(--rose);
-  filter:drop-shadow(0 0 4px var(--rose)) drop-shadow(0 0 12px rgba(255,45,126,.7));
+  width:100%;max-width:var(--bulb);aspect-ratio:1;justify-self:center;
+  display:block;color:var(--rose);
+  filter:drop-shadow(0 0 3px var(--rose)) drop-shadow(0 0 9px rgba(255,45,126,.7));
   transition:color .35s,filter .35s;
 }
 .bulb path{fill:currentColor}
@@ -164,12 +142,43 @@ input.count:focus{
 .bulb.last{animation:dying 1.6s infinite}
 @keyframes dying{0%,100%{opacity:1}42%{opacity:.25}46%{opacity:1}58%{opacity:.2}62%{opacity:1}}
 .tally{
-  order:2;margin-left:auto;
-  font-family:var(--mono);font-size:.95rem;letter-spacing:.12em;
+  display:block;text-align:right;margin-top:10px;
+  font-family:var(--mono);font-size:.8rem;letter-spacing:.12em;
   color:var(--muted);white-space:nowrap;
 }
 .tally b{color:var(--rose);font-weight:400;text-shadow:0 0 10px rgba(255,45,126,.9)}
 .tally.out b{color:#4a4360;text-shadow:none}
+
+/* 分母就是生命總數，本身是一個輸入框。沒在編輯時必須跟旁邊的純文字分不出來：
+   字體、字距、顏色一律繼承，沒有框線、沒有底色、沒有內距，寬度由 sizeCount() 照位數量出來。 */
+.denom{position:relative;display:inline-block}
+.ghost{position:absolute;left:0;top:0;visibility:hidden;white-space:pre}
+.tally input.count{
+  width:1ch;padding:0;margin:0;border:0;border-radius:0;background:none;
+  font:inherit;letter-spacing:inherit;color:inherit;text-align:right;
+  cursor:text;transition:box-shadow .2s,color .2s,text-shadow .2s;
+}
+/* 底線用 inset 陰影畫，加框線會把後面的字推開，一滑過去就露餡了 */
+.denom:hover input.count:not(:focus){box-shadow:inset 0 -1px 0 rgba(61,240,255,.35)}
+.tally input.count::selection{background:rgba(61,240,255,.28);color:#eafcff}
+.tally input.count:focus,.tally input.count:focus-visible{
+  outline:none;color:#eafcff;
+  box-shadow:inset 0 -1px 0 var(--cyan);
+  text-shadow:0 0 10px var(--cyan);
+}
+/* 上下鍵平常完全不存在，滑過或游標進到分母才浮出來 */
+.nudge{
+  position:absolute;left:100%;top:50%;transform:translateY(-50%);
+  margin-left:1px;display:flex;flex-direction:column;
+  opacity:0;transition:opacity .15s;
+}
+.nudge:hover,.tally:hover .nudge,.denom:focus-within .nudge{opacity:1}
+.nudge button{
+  width:11px;height:10px;padding:0;border:0;background:transparent;
+  color:var(--muted);font-size:9px;line-height:10px;cursor:pointer;
+}
+.nudge button:hover:not(:disabled){color:var(--cyan);text-shadow:0 0 8px var(--cyan)}
+.nudge button:disabled{color:#332e47;cursor:not-allowed}
 
 /* ── 輸入 ─────────────────────── */
 textarea,input,select{font-family:inherit;color:#e6e2f7}
@@ -179,8 +188,9 @@ textarea,input{
   padding:12px 14px;font-size:1rem;line-height:1.75;
   transition:border-color .2s,box-shadow .2s;
 }
-textarea{resize:vertical;min-height:150px}
-#bottom{min-height:190px}
+/* 高度由內容決定（見下方的 fit），這裡只給下限 */
+textarea{resize:none;overflow:hidden;min-height:110px}
+#bottom{min-height:130px}
 textarea::placeholder,input::placeholder{color:#4f4869}
 textarea:focus,input:focus,select:focus{
   outline:none;border-color:var(--cyan);
@@ -189,13 +199,15 @@ textarea:focus,input:focus,select:focus{
 #bottom:focus{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber),0 0 18px rgba(255,176,58,.28)}
 
 /* ── 提問列 ─────────────────────── */
-ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .qrow{
   display:grid;
-  grid-template-columns:1.9rem minmax(0,1.6fr) 5.3rem minmax(0,1fr);
-  gap:8px;align-items:center;
+  grid-template-columns:1.4rem minmax(0,1.6fr) 5.3rem minmax(0,1fr);
+  gap:6px;align-items:stretch;
 }
-.qrow .qtext,.qrow .qnote{padding:6px 10px;font-size:.9rem;line-height:1.5}
+/* 提問與註解是會換行的 textarea，高度交給 fit()，不留下限 */
+.qrow textarea{display:block;min-height:0;height:auto}
+.qrow .qtext,.qrow .qnote{padding:5px 10px;font-size:.9rem;line-height:1.5}
 .qrow .qnote{
   background:rgba(5,5,12,.35);border-color:rgba(160,107,255,.2);
   color:#b9b1d8;font-size:.84rem;
@@ -205,18 +217,22 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   border-color:var(--violet);
   box-shadow:0 0 0 1px var(--violet),0 0 16px rgba(160,107,255,.26),inset 0 0 20px rgba(160,107,255,.06);
 }
-.qnum{font-family:var(--mono);font-size:.8rem;color:#4f4869;text-align:right;transition:color .2s,text-shadow .2s}
+.qnum{
+  display:flex;align-items:center;justify-content:flex-end;
+  font-family:var(--mono);font-size:.8rem;color:#4f4869;
+  transition:color .2s,text-shadow .2s;
+}
 .qrow.filled .qnum{color:var(--cyan);text-shadow:0 0 10px rgba(61,240,255,.8)}
-.sel{position:relative}
+.sel{position:relative;display:flex}
 .sel::after{
   content:"▾";position:absolute;right:8px;top:50%;transform:translateY(-50%);
   pointer-events:none;font-size:.7rem;color:var(--muted);
 }
 .sel select{
-  width:100%;appearance:none;-webkit-appearance:none;
+  width:100%;height:100%;appearance:none;-webkit-appearance:none;
   background:rgba(5,5,12,.6);border:1px solid var(--line);border-radius:2px;
-  padding:6px 19px 6px 9px;font-size:.82rem;cursor:pointer;
-  font-family:var(--mono);letter-spacing:.04em;
+  padding:5px 19px 5px 9px;font-size:.82rem;cursor:pointer;
+  font-family:var(--mono);letter-spacing:.04em;color:#4f4869;
   transition:border-color .2s,box-shadow .2s,color .2s;
 }
 .sel select option{background:#12101c;color:#e6e2f7;font-family:var(--sans)}
@@ -227,12 +243,12 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 .stash:empty{display:none}
 
 /* ── 清空 ─────────────────────── */
-.footer{text-align:center;margin-top:34px}
+.footer{text-align:right;margin-top:14px}
 .wipe{
-  font-family:var(--serif);font-weight:600;font-size:.95rem;letter-spacing:.28em;padding-left:.28em;
+  font-family:var(--serif);font-weight:600;font-size:.78rem;letter-spacing:.2em;
   background:transparent;color:var(--rose);
   border:1px solid rgba(255,45,126,.45);border-radius:2px;
-  padding:13px 30px;cursor:pointer;transition:.2s;
+  padding:7px 16px 7px calc(16px + .2em);cursor:pointer;transition:.2s;
 }
 .wipe:hover{background:rgba(255,45,126,.1);box-shadow:0 0 22px rgba(255,45,126,.35);text-shadow:0 0 10px var(--rose)}
 
@@ -278,14 +294,12 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   .p-bottom{order:4}
 }
 @media (max-width:640px){
-  .qrow{grid-template-columns:1.6rem 1fr 4.9rem;gap:6px 6px}
-  .qrow .qtext,.qrow .qnote{padding:6px 8px;font-size:.85rem}
+  .qrow{grid-template-columns:1.2rem 1fr 4.9rem;gap:6px 5px}
+  .qrow .qtext,.qrow .qnote{padding:5px 8px;font-size:.85rem}
   .qrow .qnote{grid-column:2 / -1;font-size:.8rem}
-  .sel select{padding:6px 17px 6px 7px;font-size:.76rem}
-  ol.qlist{gap:12px}
-  .lifebar{gap:12px}
-  .bulbs{gap:6px}
-  .bulb{width:21px;height:21px}
+  .sel select{padding:5px 17px 5px 7px;font-size:.76rem}
+  ol.qlist{gap:15px}
+  .bulbs{gap:5px}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -299,7 +313,6 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   <header class="sign">
     <p class="eyebrow">Lateral · Soup · Log</p>
     <h1>海龜<span class="dim">湯</span></h1>
-    <p class="tagline">問對問題，才撈得到真相</p>
   </header>
 
   <div class="stage">
@@ -320,14 +333,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
           <h2 class="h-cyan">生命</h2>
         </div>
         <div class="lifebar">
-          <div class="stepper">
-            <button id="minus" type="button" aria-label="減少生命">−</button>
-            <input id="count" class="count" type="text" inputmode="numeric" autocomplete="off"
-                   maxlength="3" value="6" aria-label="生命數，可直接輸入">
-            <button id="plus" type="button" aria-label="增加生命">+</button>
-          </div>
           <div class="bulbs" id="bulbs" aria-hidden="true"></div>
-          <span class="tally" id="tally" aria-live="polite"></span>
+          <span class="tally" id="tally"><span aria-live="polite">剩 <b id="left">6</b></span> / <span class="denom"><span class="ghost" id="ghost" aria-hidden="true">6</span><input id="count" class="count" type="text" inputmode="numeric" autocomplete="off" maxlength="3" value="6" aria-label="生命總數，可直接輸入"><span class="nudge"><button id="plus" type="button" aria-label="增加生命">▴</button><button id="minus" type="button" aria-label="減少生命">▾</button></span></span></span>
         </div>
       </section>
 
@@ -370,7 +377,7 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 
   const $ = id => document.getElementById(id);
   const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'),
-        count = $('count'), stash = $('stash'),
+        count = $('count'), leftNum = $('left'), ghost = $('ghost'), stash = $('stash'),
         veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts');
 
   const pad = n => String(n).padStart(2,'0');
@@ -382,6 +389,48 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   function grow(){ while(state.rows.length < state.lives) state.rows.push({q:'',a:'',n:''}); }
   function used(){ return state.rows.slice(0, state.lives).filter(alive).length; }
 
+  /* ── 輸入框跟著內容長高 ──────────────
+     長問題要看得到全文，短問題不該佔一整塊，所以高度由內容決定。
+     寫的是 min-height 不是 height：湯底那格還要能被 flex:1 撐滿右欄。 */
+  const floorOf = new WeakMap();
+  function fit(el){
+    if(!el) return;
+    if(!floorOf.has(el)) floorOf.set(el, parseFloat(getComputedStyle(el).minHeight) || 0);
+    const st = el.style;
+    st.minHeight = '0px';
+    st.height = 'auto';
+    // 不先解掉 flex:1 與 grid 的 stretch，量到的會是被撐開的高度，而不是內容高度
+    st.flex = '0 0 auto';
+    st.alignSelf = 'start';
+    const h = el.scrollHeight + el.offsetHeight - el.clientHeight;   // 加回上下框線
+    st.alignSelf = '';
+    st.flex = '';
+    st.height = '';
+    st.minHeight = Math.max(h, floorOf.get(el)) + 'px';
+  }
+  function fitAll(){
+    fit($('surface')); fit($('bottom'));
+    qlist.querySelectorAll('textarea').forEach(fit);
+  }
+  // 盯的是版面寬度而不是視窗：內容一長，捲軸就出現，可用寬度少掉十幾像素、
+  // 換行位置整個變掉，而捲軸的出現並不會觸發 resize。
+  let lastW = 0, refitting = false;
+  function refit(){
+    if(refitting) return;
+    refitting = true;
+    requestAnimationFrame(() => {
+      refitting = false;
+      const w = document.documentElement.clientWidth;
+      if(w === lastW) return;
+      lastW = w;
+      fitAll();
+    });
+  }
+  window.addEventListener('resize', refit);
+  if(window.ResizeObserver) new ResizeObserver(refit).observe(document.documentElement);
+  // 字體是後來才載入的，載入前量到的是備援字體的高度
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => { fitAll(); sizeCount(); });
+
   function drawRows(){
     grow();
     qlist.innerHTML = '';
@@ -392,7 +441,7 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
       li.dataset.i = i;
       li.innerHTML =
         '<span class="qnum">'+pad(i+1)+'</span>' +
-        '<input class="qtext" type="text" placeholder="第 '+(i+1)+' 個問題…" aria-label="第 '+(i+1)+' 個問題">' +
+        '<textarea class="qtext" rows="1" placeholder="第 '+(i+1)+' 個問題…" aria-label="第 '+(i+1)+' 個問題"></textarea>' +
         '<span class="sel" data-a="'+r.a+'">' +
           '<select aria-label="第 '+(i+1)+' 題的回答">' +
             '<option value="">— 未答</option>' +
@@ -401,17 +450,25 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
             '<option value="I">I 無關</option>' +
           '</select>' +
         '</span>' +
-        '<input class="qnote" type="text" placeholder="註解" aria-label="第 '+(i+1)+' 題的註解">';
+        '<textarea class="qnote" rows="1" placeholder="註解" aria-label="第 '+(i+1)+' 題的註解"></textarea>';
       li.querySelector('.qtext').value = r.q;
       li.querySelector('.qnote').value = r.n;
       li.querySelector('select').value = r.a;
       qlist.appendChild(li);
+      fit(li.querySelector('.qtext')); fit(li.querySelector('.qnote'));
     }
+  }
+
+  // 分母是輸入框，沒在編輯時要跟純文字分不出來，所以寬度得剛好等於那幾個數字
+  function sizeCount(){
+    ghost.textContent = count.value || '0';
+    count.style.width = ghost.getBoundingClientRect().width + 'px';
   }
 
   function drawStatus(){
     const u = used(), left = state.lives - u;
     if(document.activeElement !== count) count.value = state.lives;
+    sizeCount();
     $('minus').disabled = state.lives <= MIN;
     $('plus').disabled  = state.lives >= MAX;
 
@@ -429,11 +486,9 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
       bulbs.appendChild(svg);
     }
 
+    // 這一段不重建，分母的輸入框正在裡面，重建會把游標踢掉
     tally.className = 'tally' + (left === 0 ? ' out' : '');
-    tally.textContent = '';
-    tally.append('剩 ');
-    const b = document.createElement('b'); b.textContent = left;
-    tally.append(b, ' / ' + state.lives);
+    leftNum.textContent = left;
 
     const hidden = state.rows.slice(state.lives).filter(hasAny).length;
     stash.textContent = hidden ? '另有 ' + hidden + ' 列被收起，內容還在，加回生命就會出現。' : '';
@@ -446,12 +501,20 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   qlist.addEventListener('input', e => {
     const li = e.target.closest('.qrow');
     if(!li) return;
+    fit(e.target);
     const r = state.rows[+li.dataset.i];
     if(e.target.classList.contains('qtext'))      r.q = e.target.value;
     else if(e.target.classList.contains('qnote')) { r.n = e.target.value; return; }
     else return;
     li.classList.toggle('filled', alive(r));
     drawStatus();
+  });
+
+  qlist.addEventListener('keydown', e => {
+    if(e.key !== 'Enter') return;
+    if(!e.target.classList.contains('qtext') && !e.target.classList.contains('qnote')) return;
+    e.preventDefault();
+    e.target.blur();
   });
 
   qlist.addEventListener('change', e => {
@@ -468,12 +531,19 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
     state.lives = Math.min(MAX, Math.max(MIN, n));
     drawRows(); drawStatus();
   }
-  $('minus').onclick = () => setLives(state.lives - 1);
-  $('plus').onclick  = () => setLives(state.lives + 1);
+  // 上下鍵與鍵盤共用：欄位正在編輯時 drawStatus 不會覆蓋它，值與寬度要自己補
+  function bump(d){
+    setLives(state.lives + d);
+    count.value = state.lives;
+    sizeCount();
+  }
+  $('minus').onclick = () => bump(-1);
+  $('plus').onclick  = () => bump(1);
 
   count.addEventListener('input', () => {
     const digits = count.value.replace(/\D/g, '');
     if(digits !== count.value) count.value = digits;
+    sizeCount();
     const n = parseInt(digits, 10);
     // 打到一半的數字（空的、0、超出上限）先不動，等離開欄位再收斂
     if(!isNaN(n) && n >= MIN && n <= MAX && n !== state.lives) setLives(n);
@@ -482,14 +552,18 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
     const n = parseInt(count.value, 10);
     if(!isNaN(n)) setLives(n);
     count.value = state.lives;
+    sizeCount();
     drawStatus();   // 離開欄位才判斷生命是否已經用光
   });
   count.addEventListener('keydown', e => {
     if(e.key === 'Enter'){ e.preventDefault(); count.blur(); }
-    else if(e.key === 'ArrowUp'){ e.preventDefault(); setLives(state.lives + 1); count.value = state.lives; }
-    else if(e.key === 'ArrowDown'){ e.preventDefault(); setLives(state.lives - 1); count.value = state.lives; }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); bump(1); }
+    else if(e.key === 'ArrowDown'){ e.preventDefault(); bump(-1); }
   });
   count.addEventListener('focus', () => count.select());
+
+  $('surface').addEventListener('input', e => fit(e.target));
+  $('bottom').addEventListener('input', e => fit(e.target));
 
   /* ── 提示視窗 ── */
   let lastFocus = null;
@@ -535,14 +609,14 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
               $('bottom').value = '';
               state.rows = [];
               announced = false;
-              drawRows(); drawStatus();
+              drawRows(); drawStatus(); fitAll();
               $('surface').focus();
           }},
           { label:'留著' }
         ]);
   };
 
-  drawRows(); drawStatus();
+  drawRows(); drawStatus(); fitAll();
 })();
 </script>
 </body>
