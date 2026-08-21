@@ -255,22 +255,51 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   transition:color .2s,text-shadow .2s;
 }
 .qrow.filled .qnum{color:var(--cyan);text-shadow:0 0 10px rgba(61,240,255,.8)}
-.sel{position:relative;display:flex}
-.sel::after{
+/* 回答選單。原生 <select> 的下拉是作業系統畫的，配色、字體都套不進來，所以自己做一個。 */
+.pick{position:relative;display:flex}
+.pick::after{
   content:"▾";position:absolute;right:8px;top:50%;transform:translateY(-50%);
-  pointer-events:none;font-size:.7rem;color:var(--muted);
+  pointer-events:none;font-size:.7rem;color:var(--muted);transition:transform .18s;
 }
-.sel select{
-  width:100%;height:100%;appearance:none;-webkit-appearance:none;
+.pick[data-open]::after{transform:translateY(-50%) rotate(180deg)}
+.pick-btn{
+  width:100%;text-align:left;
   background:rgba(5,5,12,.6);border:1px solid var(--line);border-radius:2px;
   padding:5px 19px 5px 9px;font-size:.82rem;cursor:pointer;
   font-family:var(--mono);letter-spacing:.04em;color:#4f4869;
   transition:border-color .2s,box-shadow .2s,color .2s;
 }
-.sel select option{background:#12101c;color:#e6e2f7;font-family:var(--sans)}
-.sel[data-a="T"] select{color:var(--lime);border-color:rgba(166,255,77,.55);box-shadow:0 0 12px rgba(166,255,77,.2)}
-.sel[data-a="F"] select{color:var(--rose);border-color:rgba(255,45,126,.55);box-shadow:0 0 12px rgba(255,45,126,.2)}
-.sel[data-a="I"] select{color:var(--amber);border-color:rgba(255,176,58,.55);box-shadow:0 0 12px rgba(255,176,58,.2)}
+.pick-btn:hover{border-color:rgba(125,115,180,.5)}
+.pick-btn:focus-visible{outline:none}
+.pick-btn:focus-visible,.pick[data-open] .pick-btn{
+  border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 16px rgba(61,240,255,.22);
+}
+.pick[data-a="T"] .pick-btn{color:var(--lime);border-color:rgba(166,255,77,.55);box-shadow:0 0 12px rgba(166,255,77,.2)}
+.pick[data-a="F"] .pick-btn{color:var(--rose);border-color:rgba(255,45,126,.55);box-shadow:0 0 12px rgba(255,45,126,.2)}
+.pick[data-a="I"] .pick-btn{color:var(--amber);border-color:rgba(255,176,58,.55);box-shadow:0 0 12px rgba(255,176,58,.2)}
+
+.pick-menu{
+  position:absolute;z-index:30;left:0;right:0;top:calc(100% + 5px);
+  margin:0;padding:3px;list-style:none;
+  background:#0c0a15;border:1px solid var(--line);border-radius:2px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.6), 0 16px 40px rgba(0,0,0,.8);
+  animation:drop .14s ease-out;
+}
+/* 靠近視窗底部時往上開，不然清單會掉到看不見的地方 */
+.pick.up .pick-menu{top:auto;bottom:calc(100% + 5px)}
+@keyframes drop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.pick-opt{
+  padding:5px 8px;border-radius:1px;white-space:nowrap;cursor:pointer;
+  font-family:var(--mono);font-size:.82rem;letter-spacing:.04em;color:#4f4869;
+  transition:background .12s,color .12s;
+}
+.pick-opt[data-v="T"]{color:var(--lime)}
+.pick-opt[data-v="F"]{color:var(--rose)}
+.pick-opt[data-v="I"]{color:var(--amber)}
+.pick-opt:hover,.pick-opt.on{background:rgba(61,240,255,.10)}
+.pick-opt.on{box-shadow:inset 2px 0 0 var(--cyan)}
+/* 目前這一題的答案：左邊留一個記號，跟游標所在的那一項分得開 */
+.pick-opt[aria-selected="true"]{background:rgba(125,115,180,.12)}
 .stash{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:var(--amber);margin:14px 0 0;opacity:.85}
 .stash:empty{display:none}
 
@@ -331,7 +360,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   .qrow{grid-template-columns:1.2rem 1fr 4.9rem;gap:6px 5px}
   .qrow .qtext,.qrow .qnote{padding:5px 8px;font-size:.85rem}
   .qrow .qnote{grid-column:2 / -1;font-size:.8rem}
-  .sel select{padding:5px 17px 5px 7px;font-size:.76rem}
+  .pick-btn,.pick-opt{padding:5px 7px;font-size:.76rem}
+  .pick-btn{padding-right:17px}
   ol.qlist{gap:15px}
   .bulbs{gap:5px}
 }

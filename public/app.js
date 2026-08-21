@@ -54,16 +54,7 @@
     q.placeholder = '第 ' + (i + 1) + ' 個問題…';
     q.setAttribute('aria-label', '第 ' + (i + 1) + ' 個問題');
 
-    const sel = document.createElement('span');
-    sel.className = 'sel';
-    const s = document.createElement('select');
-    s.setAttribute('aria-label', '第 ' + (i + 1) + ' 題的回答');
-    [['', '— 未答'], ['T', 'T 是'], ['F', 'F 否'], ['I', 'I 無關']].forEach(([v, t]) => {
-      const o = document.createElement('option');
-      o.value = v; o.textContent = t;
-      s.appendChild(o);
-    });
-    sel.appendChild(s);
+    const sel = makePick(i);
 
     const n = document.createElement('textarea');
     n.className = 'qnote';
@@ -79,7 +70,160 @@
   function ensureRows() {
     while (qlist.children.length < doc.lives) qlist.appendChild(makeRow(qlist.children.length));
     while (qlist.children.length > doc.lives) qlist.removeChild(qlist.lastChild);
+    if (openPick && !qlist.contains(openPick)) openPick = null;   // 那一列被收掉了
   }
+
+  /* ── 回答選單 ──────────────────────
+     原生 <select> 的下拉是作業系統畫的，字體與配色都套不進來，所以自己做一個。
+     值仍然只有 '' / T / F / I；焦點永遠留在按鈕上，游標所在的項目用
+     aria-activedescendant 指過去 —— listbox 的標準作法，讀螢幕的人才跟得上。 */
+
+  const ANSWERS = [['', '— 未答'], ['T', 'T 是'], ['F', 'F 否'], ['I', 'I 無關']];
+  const label = v => (ANSWERS.find(a => a[0] === v) || ANSWERS[0])[1];
+  let openPick = null;
+
+  function makePick(i) {
+    const wrap = document.createElement('span');
+    wrap.className = 'pick';
+    wrap.dataset.a = '';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pick-btn';
+    btn.setAttribute('aria-haspopup', 'listbox');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-label', '第 ' + (i + 1) + ' 題的回答');
+    btn.textContent = label('');
+
+    const menu = document.createElement('ul');
+    menu.className = 'pick-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+    ANSWERS.forEach(([v, t]) => {
+      const opt = document.createElement('li');
+      opt.className = 'pick-opt';
+      opt.id = 'a' + i + (v || 'x');
+      opt.setAttribute('role', 'option');
+      opt.setAttribute('aria-selected', v === '' ? 'true' : 'false');
+      opt.dataset.v = v;
+      opt.textContent = t;
+      menu.appendChild(opt);
+    });
+
+    wrap.append(btn, menu);
+    return wrap;
+  }
+
+  function paintPick(li, v) {
+    const wrap = li.querySelector('.pick');
+    if (!wrap) return;
+    wrap.dataset.a = v;
+    wrap.querySelector('.pick-btn').textContent = label(v);
+    for (const opt of wrap.querySelectorAll('.pick-opt'))
+      opt.setAttribute('aria-selected', String(opt.dataset.v === v));
+  }
+
+  // 游標停在哪一項。焦點不搬家，只換記號。
+  function mark(wrap, v) {
+    let cur = null;
+    for (const opt of wrap.querySelectorAll('.pick-opt')) {
+      const on = opt.dataset.v === v;
+      opt.classList.toggle('on', on);
+      if (on) cur = opt;
+    }
+    if (cur) wrap.querySelector('.pick-btn').setAttribute('aria-activedescendant', cur.id);
+  }
+  function marked(wrap) {
+    const on = wrap.querySelector('.pick-opt.on');
+    return on ? on.dataset.v : wrap.dataset.a;
+  }
+
+  function openMenu(wrap) {
+    if (openPick && openPick !== wrap) closeMenu();
+    openPick = wrap;
+    const menu = wrap.querySelector('.pick-menu');
+    menu.hidden = false;
+    wrap.dataset.open = '1';
+    wrap.querySelector('.pick-btn').setAttribute('aria-expanded', 'true');
+    // 靠近視窗底部就往上開，不然清單會掉到看不見的地方
+    const box = wrap.getBoundingClientRect();
+    wrap.classList.toggle('up',
+      box.bottom + menu.offsetHeight + 10 > innerHeight && box.top > menu.offsetHeight + 10);
+    mark(wrap, wrap.dataset.a);
+  }
+
+  function closeMenu() {
+    if (!openPick) return;
+    const wrap = openPick;
+    openPick = null;
+    wrap.querySelector('.pick-menu').hidden = true;
+    delete wrap.dataset.open;
+    wrap.classList.remove('up');
+    const btn = wrap.querySelector('.pick-btn');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.removeAttribute('aria-activedescendant');
+  }
+
+  function answer(li, v) {
+    const i = Number(li.dataset.i), r = row(i);
+    paintPick(li, v);
+    if (r.a === v) return;
+    r.a = v;
+    li.classList.toggle('filled', alive(r));
+    queue('rows.' + i + '.a', r.a);
+    drawStatus();
+  }
+
+  qlist.addEventListener('click', e => {
+    const btn = e.target.closest('.pick-btn');
+    if (btn) {
+      const wrap = btn.parentNode;
+      if (openPick === wrap) closeMenu(); else openMenu(wrap);
+      return;
+    }
+    const opt = e.target.closest('.pick-opt');
+    if (!opt) return;
+    const wrap = opt.closest('.pick');
+    answer(opt.closest('.qrow'), opt.dataset.v);
+    closeMenu();
+    wrap.querySelector('.pick-btn').focus();
+  });
+
+  qlist.addEventListener('keydown', e => {
+    const wrap = e.target.closest && e.target.closest('.pick');
+    if (!wrap) return;
+    const open = openPick === wrap;
+    const key = e.key;
+
+    if (key === 'Escape') { if (open) { e.preventDefault(); closeMenu(); } return; }
+    if (key === 'Tab') { closeMenu(); return; }
+    if (key === 'Enter' || key === ' ') {
+      e.preventDefault();
+      if (open) { answer(wrap.closest('.qrow'), marked(wrap)); closeMenu(); }
+      else openMenu(wrap);
+      return;
+    }
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      e.preventDefault();
+      if (!open) { openMenu(wrap); return; }
+      const at = ANSWERS.findIndex(a => a[0] === marked(wrap));
+      const to = (at + (key === 'ArrowDown' ? 1 : ANSWERS.length - 1) + ANSWERS.length) % ANSWERS.length;
+      mark(wrap, ANSWERS[to][0]);
+      return;
+    }
+    // 主持一局要按很多次，所以 T / F / I 直接就是答案，0 或退格是收回
+    const k = key.length === 1 ? key.toUpperCase() : key;
+    if (k === 'T' || k === 'F' || k === 'I' || k === '0' || k === 'Backspace' || k === 'Delete') {
+      e.preventDefault();
+      answer(wrap.closest('.qrow'), 'TFI'.indexOf(k) >= 0 ? k : '');
+      closeMenu();
+    }
+  });
+
+  // 點到別處就收起來。按鈕本身的點擊在上面處理完了，這裡看的是選單以外的點擊。
+  document.addEventListener('click', e => {
+    if (openPick && !openPick.contains(e.target)) closeMenu();
+  });
 
   function paintRow(i, force) {
     const li = qlist.children[i];
@@ -88,8 +232,8 @@
     const q = li.querySelector('.qtext'), n = li.querySelector('.qnote');
     put(q, r.q, force);
     put(n, r.n, force);
-    put(li.querySelector('select'), r.a, force);
-    li.querySelector('.sel').dataset.a = r.a;
+    // 選單開著就別重畫：那等於使用者正在挑答案
+    if (force || li.querySelector('.pick') !== openPick) paintPick(li, r.a);
     li.classList.toggle('filled', alive(r));
     grow(q); grow(n);
   }
@@ -422,17 +566,6 @@
     if (!e.target.classList.contains('qtext') && !e.target.classList.contains('qnote')) return;
     e.preventDefault();
     e.target.blur();
-  });
-
-  qlist.addEventListener('change', e => {
-    if (e.target.tagName !== 'SELECT') return;
-    const li = e.target.closest('.qrow');
-    const i = Number(li.dataset.i), r = row(i);
-    r.a = e.target.value;
-    li.querySelector('.sel').dataset.a = r.a;
-    li.classList.toggle('filled', alive(r));
-    queue('rows.' + i + '.a', r.a);
-    drawStatus();
   });
 
   surface.addEventListener('input', () => { grow(surface); doc.surface = surface.value; queue('surface', doc.surface); });

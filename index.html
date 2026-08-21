@@ -253,22 +253,51 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   transition:color .2s,text-shadow .2s;
 }
 .qrow.filled .qnum{color:var(--cyan);text-shadow:0 0 10px rgba(61,240,255,.8)}
-.sel{position:relative;display:flex}
-.sel::after{
+/* 回答選單。原生 <select> 的下拉是作業系統畫的，配色、字體都套不進來，所以自己做一個。 */
+.pick{position:relative;display:flex}
+.pick::after{
   content:"▾";position:absolute;right:8px;top:50%;transform:translateY(-50%);
-  pointer-events:none;font-size:.7rem;color:var(--muted);
+  pointer-events:none;font-size:.7rem;color:var(--muted);transition:transform .18s;
 }
-.sel select{
-  width:100%;height:100%;appearance:none;-webkit-appearance:none;
+.pick[data-open]::after{transform:translateY(-50%) rotate(180deg)}
+.pick-btn{
+  width:100%;text-align:left;
   background:rgba(5,5,12,.6);border:1px solid var(--line);border-radius:2px;
   padding:5px 19px 5px 9px;font-size:.82rem;cursor:pointer;
   font-family:var(--mono);letter-spacing:.04em;color:#4f4869;
   transition:border-color .2s,box-shadow .2s,color .2s;
 }
-.sel select option{background:#12101c;color:#e6e2f7;font-family:var(--sans)}
-.sel[data-a="T"] select{color:var(--lime);border-color:rgba(166,255,77,.55);box-shadow:0 0 12px rgba(166,255,77,.2)}
-.sel[data-a="F"] select{color:var(--rose);border-color:rgba(255,45,126,.55);box-shadow:0 0 12px rgba(255,45,126,.2)}
-.sel[data-a="I"] select{color:var(--amber);border-color:rgba(255,176,58,.55);box-shadow:0 0 12px rgba(255,176,58,.2)}
+.pick-btn:hover{border-color:rgba(125,115,180,.5)}
+.pick-btn:focus-visible{outline:none}
+.pick-btn:focus-visible,.pick[data-open] .pick-btn{
+  border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 16px rgba(61,240,255,.22);
+}
+.pick[data-a="T"] .pick-btn{color:var(--lime);border-color:rgba(166,255,77,.55);box-shadow:0 0 12px rgba(166,255,77,.2)}
+.pick[data-a="F"] .pick-btn{color:var(--rose);border-color:rgba(255,45,126,.55);box-shadow:0 0 12px rgba(255,45,126,.2)}
+.pick[data-a="I"] .pick-btn{color:var(--amber);border-color:rgba(255,176,58,.55);box-shadow:0 0 12px rgba(255,176,58,.2)}
+
+.pick-menu{
+  position:absolute;z-index:30;left:0;right:0;top:calc(100% + 5px);
+  margin:0;padding:3px;list-style:none;
+  background:#0c0a15;border:1px solid var(--line);border-radius:2px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.6), 0 16px 40px rgba(0,0,0,.8);
+  animation:drop .14s ease-out;
+}
+/* 靠近視窗底部時往上開，不然清單會掉到看不見的地方 */
+.pick.up .pick-menu{top:auto;bottom:calc(100% + 5px)}
+@keyframes drop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.pick-opt{
+  padding:5px 8px;border-radius:1px;white-space:nowrap;cursor:pointer;
+  font-family:var(--mono);font-size:.82rem;letter-spacing:.04em;color:#4f4869;
+  transition:background .12s,color .12s;
+}
+.pick-opt[data-v="T"]{color:var(--lime)}
+.pick-opt[data-v="F"]{color:var(--rose)}
+.pick-opt[data-v="I"]{color:var(--amber)}
+.pick-opt:hover,.pick-opt.on{background:rgba(61,240,255,.10)}
+.pick-opt.on{box-shadow:inset 2px 0 0 var(--cyan)}
+/* 目前這一題的答案：左邊留一個記號，跟游標所在的那一項分得開 */
+.pick-opt[aria-selected="true"]{background:rgba(125,115,180,.12)}
 .stash{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:var(--amber);margin:14px 0 0;opacity:.85}
 .stash:empty{display:none}
 
@@ -329,7 +358,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   .qrow{grid-template-columns:1.2rem 1fr 4.9rem;gap:6px 5px}
   .qrow .qtext,.qrow .qnote{padding:5px 8px;font-size:.85rem}
   .qrow .qnote{grid-column:2 / -1;font-size:.8rem}
-  .sel select{padding:5px 17px 5px 7px;font-size:.76rem}
+  .pick-btn,.pick-opt{padding:5px 7px;font-size:.76rem}
+  .pick-btn{padding-right:17px}
   ol.qlist{gap:15px}
   .bulbs{gap:5px}
 }
@@ -465,6 +495,7 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 
   function drawRows(){
     grow();
+    openPick = null;   // 整份重建，開著的選單也跟著沒了
     qlist.innerHTML = '';
     for(let i = 0; i < state.lives; i++){
       const r = state.rows[i];
@@ -474,18 +505,10 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
       li.innerHTML =
         '<span class="qnum">'+pad(i+1)+'</span>' +
         '<textarea class="qtext" rows="1" placeholder="第 '+(i+1)+' 個問題…" aria-label="第 '+(i+1)+' 個問題"></textarea>' +
-        '<span class="sel" data-a="'+r.a+'">' +
-          '<select aria-label="第 '+(i+1)+' 題的回答">' +
-            '<option value="">— 未答</option>' +
-            '<option value="T">T 是</option>' +
-            '<option value="F">F 否</option>' +
-            '<option value="I">I 無關</option>' +
-          '</select>' +
-        '</span>' +
+        pickHTML(i, r.a) +
         '<textarea class="qnote" rows="1" placeholder="註解" aria-label="第 '+(i+1)+' 題的註解"></textarea>';
       li.querySelector('.qtext').value = r.q;
       li.querySelector('.qnote').value = r.n;
-      li.querySelector('select').value = r.a;
       qlist.appendChild(li);
       fit(li.querySelector('.qtext')); fit(li.querySelector('.qnote'));
     }
@@ -549,14 +572,133 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
     e.target.blur();
   });
 
-  qlist.addEventListener('change', e => {
-    if(e.target.tagName !== 'SELECT') return;
-    const li = e.target.closest('.qrow');
+  /* ── 回答選單 ──────────────────────
+     原生 <select> 的下拉是作業系統畫的，字體與配色都套不進來，所以自己做一個。
+     值仍然只有 '' / T / F / I；焦點永遠留在按鈕上，游標所在的項目用
+     aria-activedescendant 指過去 —— listbox 的標準作法。 */
+
+  const ANSWERS = [['', '— 未答'], ['T', 'T 是'], ['F', 'F 否'], ['I', 'I 無關']];
+  const label = v => (ANSWERS.find(a => a[0] === v) || ANSWERS[0])[1];
+  let openPick = null;
+
+  function pickHTML(i, a){
+    return '<span class="pick" data-a="'+a+'">' +
+      '<button type="button" class="pick-btn" aria-haspopup="listbox" aria-expanded="false"' +
+        ' aria-label="第 '+(i+1)+' 題的回答">'+label(a)+'</button>' +
+      '<ul class="pick-menu" role="listbox" hidden>' +
+        ANSWERS.map(([v,t]) =>
+          '<li class="pick-opt" role="option" id="a'+i+(v||'x')+'" data-v="'+v+'"' +
+          ' aria-selected="'+(v === a)+'">'+t+'</li>').join('') +
+      '</ul></span>';
+  }
+
+  function paintPick(li, v){
+    const wrap = li.querySelector('.pick');
+    if(!wrap) return;
+    wrap.dataset.a = v;
+    wrap.querySelector('.pick-btn').textContent = label(v);
+    wrap.querySelectorAll('.pick-opt').forEach(opt =>
+      opt.setAttribute('aria-selected', String(opt.dataset.v === v)));
+  }
+
+  // 游標停在哪一項。焦點不搬家，只換記號。
+  function mark(wrap, v){
+    let cur = null;
+    wrap.querySelectorAll('.pick-opt').forEach(opt => {
+      const on = opt.dataset.v === v;
+      opt.classList.toggle('on', on);
+      if(on) cur = opt;
+    });
+    if(cur) wrap.querySelector('.pick-btn').setAttribute('aria-activedescendant', cur.id);
+  }
+  function marked(wrap){
+    const on = wrap.querySelector('.pick-opt.on');
+    return on ? on.dataset.v : wrap.dataset.a;
+  }
+
+  function openMenu(wrap){
+    if(openPick && openPick !== wrap) closeMenu();
+    openPick = wrap;
+    const menu = wrap.querySelector('.pick-menu');
+    menu.hidden = false;
+    wrap.dataset.open = '1';
+    wrap.querySelector('.pick-btn').setAttribute('aria-expanded', 'true');
+    // 靠近視窗底部就往上開，不然清單會掉到看不見的地方
+    const box = wrap.getBoundingClientRect();
+    wrap.classList.toggle('up',
+      box.bottom + menu.offsetHeight + 10 > innerHeight && box.top > menu.offsetHeight + 10);
+    mark(wrap, wrap.dataset.a);
+  }
+
+  function closeMenu(){
+    if(!openPick) return;
+    const wrap = openPick;
+    openPick = null;
+    wrap.querySelector('.pick-menu').hidden = true;
+    delete wrap.dataset.open;
+    wrap.classList.remove('up');
+    const btn = wrap.querySelector('.pick-btn');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.removeAttribute('aria-activedescendant');
+  }
+
+  function answer(li, v){
     const r = state.rows[+li.dataset.i];
-    r.a = e.target.value;
-    li.querySelector('.sel').dataset.a = e.target.value;
+    paintPick(li, v);
+    if(r.a === v) return;
+    r.a = v;
     li.classList.toggle('filled', alive(r));
     drawStatus();
+  }
+
+  qlist.addEventListener('click', e => {
+    const btn = e.target.closest('.pick-btn');
+    if(btn){
+      const wrap = btn.parentNode;
+      if(openPick === wrap) closeMenu(); else openMenu(wrap);
+      return;
+    }
+    const opt = e.target.closest('.pick-opt');
+    if(!opt) return;
+    const wrap = opt.closest('.pick');
+    answer(opt.closest('.qrow'), opt.dataset.v);
+    closeMenu();
+    wrap.querySelector('.pick-btn').focus();
+  });
+
+  qlist.addEventListener('keydown', e => {
+    const wrap = e.target.closest && e.target.closest('.pick');
+    if(!wrap) return;
+    const open = openPick === wrap, key = e.key;
+
+    if(key === 'Escape'){ if(open){ e.preventDefault(); closeMenu(); } return; }
+    if(key === 'Tab'){ closeMenu(); return; }
+    if(key === 'Enter' || key === ' '){
+      e.preventDefault();
+      if(open){ answer(wrap.closest('.qrow'), marked(wrap)); closeMenu(); }
+      else openMenu(wrap);
+      return;
+    }
+    if(key === 'ArrowDown' || key === 'ArrowUp'){
+      e.preventDefault();
+      if(!open){ openMenu(wrap); return; }
+      const at = ANSWERS.findIndex(a => a[0] === marked(wrap));
+      const to = (at + (key === 'ArrowDown' ? 1 : ANSWERS.length - 1) + ANSWERS.length) % ANSWERS.length;
+      mark(wrap, ANSWERS[to][0]);
+      return;
+    }
+    // 主持一局要按很多次，所以 T / F / I 直接就是答案，0 或退格是收回
+    const k = key.length === 1 ? key.toUpperCase() : key;
+    if(k === 'T' || k === 'F' || k === 'I' || k === '0' || k === 'Backspace' || k === 'Delete'){
+      e.preventDefault();
+      answer(wrap.closest('.qrow'), 'TFI'.indexOf(k) >= 0 ? k : '');
+      closeMenu();
+    }
+  });
+
+  // 點到別處就收起來
+  document.addEventListener('click', e => {
+    if(openPick && !openPick.contains(e.target)) closeMenu();
   });
 
   function setLives(n){
