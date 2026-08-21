@@ -25,6 +25,9 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { unveil, isVeiled } from './veil.mjs';
+import { leaks, NGRAM, bare } from './leak.mjs';
+import { offVocab } from './vocab.mjs';
 
 /* ── 參數 ─────────────────────────── */
 
@@ -53,7 +56,8 @@ const ID = /^[\p{L}\p{N}\p{M}_-]{2,64}$/u;
 const ANS = new Set(['T', 'F', 'I']);
 const NOTE_MAX = 200;        // 與 worker/validate.js 的 LIM.n 一致
 const ROWS_MAX = 300;        // 與 LIM.rows 一致
-const NGRAM = 6;             // 註解與湯底的連續重疊字數上限
+// 要素圖的六格，由具體到抽象。順序就是提示的掃描順序。
+const SLOTS = ['物件', '場景', '關鍵事件', '方法', '身分關係', '動機'];
 const SEED_WAIT = 3500;      // 房間說自己是空的之後，等別人補一份回來的時間（略大於 DO 的 SEED_COOLDOWN）
 const TAG = '🐢 ';           // 機器回答的識別前綴
 // 玩家「主動明確要求提示」的判準。判斷放在程式裡而不是模型裡，
@@ -85,9 +89,15 @@ function loadSoup(required = true) {
   try { raw = readFileSync(path, 'utf8'); }
   catch (e) { die('讀不到湯底檔 ' + path + '：' + e.message); }
 
+  // 湯倉的檔案是遮蔽過的（見 tools/veil.mjs）。明文 JSON 也照收，手寫的湯還是能用。
   let soup;
-  try { soup = JSON.parse(raw); }
-  catch (e) { die('湯底檔不是合法 JSON：' + e.message); }
+  if (isVeiled(raw)) {
+    try { soup = unveil(raw); }
+    catch (e) { die('解不開遮蔽檔 ' + path + '：' + e.message); }
+  } else {
+    try { soup = JSON.parse(raw); }
+    catch (e) { die('湯底檔不是合法 JSON：' + e.message); }
+  }
 
   const surface = String(soup?.surface || '').normalize('NFC');
   const bottom = String(soup?.bottom || '').normalize('NFC');
@@ -97,22 +107,21 @@ function loadSoup(required = true) {
   const lives = soup.lives === undefined ? 6 : soup.lives;
   if (!Number.isInteger(lives) || lives < 1 || lives > ROWS_MAX) die('lives 要是 1 到 ' + ROWS_MAX + ' 的整數');
 
-  return { surface, bottom, lives };
+  return {
+    surface, bottom, lives,
+    kind: String(soup.kind || 'normal'),
+    elements: soup.elements || null,
+    '紅鯡魚': Array.isArray(soup['紅鯡魚']) ? soup['紅鯡魚'] : [],
+  };
 }
 
-// 比對前先把空白與標點拿掉：換個標點就繞過去的檢查沒有意義。
-const bare = s => s.normalize('NFC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
-
-/** 註解跟湯底有沒有 NGRAM 個字以上的連續重疊？有就是抄過去了。 */
-function leaks(note, bottom) {
-  const a = bare(note), b = bare(bottom);
-  const xs = [...a];
-  if (xs.length < NGRAM) return null;
-  for (let i = 0; i + NGRAM <= xs.length; i++) {
-    const win = xs.slice(i, i + NGRAM).join('');
-    if (b.includes(win)) return win;
-  }
-  return null;
+/**
+ * 房間裡已經人人看得見的文字：湯麵，加上玩家自己打過的每一則提問。
+ * 提示引用這些字是刻意的設計（「想想他為什麼要開燈」比「想想動機」有用得多），
+ * 所以洩底檢查要把它們排除在外 —— 見 tools/leak.mjs。
+ */
+function exposedIn(doc) {
+  return [doc.surface, ...doc.rows.map(r => r.q)].filter(s => s && s.trim());
 }
 
 /* ── 連線 ─────────────────────────── */
@@ -207,8 +216,11 @@ function connect(name) {
           if (g) grow(doc.rows, Number(g[1]))[g[2]] = op.v;
         }
       } else if (m.t === 'need') {
-        // 房間休眠後醒來，記憶體是空的。我們手上這份也是一份鏡像，順手補回去。
-        if (hasContent(doc)) session.send({ t: 'seed', doc });
+        // 不補。主持人是短命客戶端 —— 每個指令都重新連一次線，手上的列永遠可能是舊的，
+        // 拿它去補會整份蓋掉玩家剛打進去的提問（seed 是整份取代，不是合併）。
+        //
+        // 列的內容歸玩家的瀏覽器保管，它們才是全程在線的那一方。主持人只負責湯麵，
+        // 而湯麵是靠 restoreSurface 明確補的，不走 seed。
       }
 
       for (const fn of listeners) fn(m);
@@ -350,11 +362,49 @@ async function cmdAnswer(name) {
         + '  要給提示請等玩家自己開口（問題裡出現「提示」「線索」之類的字）。');
     }
 
-    const hit = leaks(note, soup.bottom);
-    if (hit) {
+    // 提示一律要指名是哪一格。這逼主持人從要素圖挑，而不是憑感覺造句，
+    // 也讓每一則提示在文件之外留下可追的來源。
+    const slot = flag('slot');
+    if (!slot) {
       s.close();
-      die('註解跟湯底有 ' + NGRAM + ' 個字以上重疊（「' + hit + '」），退回。\n'
-        + '  提示要用自己的話講方向，不要抄湯底原文。');
+      die('給提示要用 --slot 指名要素圖的哪一格：' + SLOTS.join('／') + '\n'
+        + '  跑 brief 看要素圖，照 skill 的掃描規則挑一格。');
+    }
+    if (!SLOTS.includes(slot)) { s.close(); die('沒有這一格：' + slot + '\n  只能是 ' + SLOTS.join('／')); }
+
+    const cell = soup.elements && soup.elements[slot];
+    if (!cell) { s.close(); die(slot + ' 這一格是空的（null），這題沒有這個方向可指'); }
+
+    const approved = (Array.isArray(cell['方向']) ? cell['方向'] : [cell['方向']])
+      .map(d => String(d || '').normalize('NFC').trim()).filter(Boolean);
+
+    // 採集期就驗過的方向句直接放行。其餘（引用了玩家問過的話的變體）走白名單檢查。
+    if (!approved.some(d => bare(d) === bare(note))) {
+      const exposed = exposedIn(s.doc);
+
+      const off = offVocab(note, exposed);
+      if (off) {
+        s.close();
+        die('註解裡的「' + off + '」既不在固定詞庫、也沒在房間裡出現過，退回。\n'
+          + '  提示只能用核准詞彙，加上房間裡已經有的字（湯麵、玩家問過的話）。\n'
+          + '  ' + slot + ' 格的現成方向句：' + approved.map(d => '「' + d + '」').join('、') + '\n'
+          + '  真的缺常用詞就補進 tools/vocab.mjs 的 SCAFFOLD，別繞過檢查。');
+      }
+
+      const hit = leaks(note, soup.bottom, exposed);
+      if (hit) {
+        s.close();
+        die('註解帶進了房間裡還沒有的湯底文字（「' + hit + '」，' + NGRAM + ' 字以上），退回。');
+      }
+    }
+
+    // 紅鯡魚是湯麵裡「看起來重要、其實無關」的詞。誤導多半不是引用了無關詞，
+    // 是引用了看起來有關的無關詞 —— 所以這些字任何時候都不准出現在提示裡。
+    const herring = soup['紅鯡魚'].find(h => h && bare(note).includes(bare(h)));
+    if (herring) {
+      s.close();
+      die('註解引用了紅鯡魚「' + herring + '」，退回。\n'
+        + '  那個詞在湯麵裡看起來重要，其實與湯底無關，指過去會把玩家帶進死胡同。');
     }
 
     const full = TAG + note;
@@ -369,6 +419,24 @@ async function cmdAnswer(name) {
   s.close();
 
   console.log('✓ 第 ' + n + ' 列已回答 ' + a + (note ? '（附提示）' : ''));
+}
+
+/**
+ * 解開遮蔽，印出湯底與要素圖。不連線、不寫任何東西。
+ *
+ * ⚠ 這是整套工具裡唯一會印出湯底的主持指令，只給主持用的 subagent 跑。
+ * 主對話不得執行 —— 使用者自己也是玩家，湯底一旦進了主對話就在他眼前。
+ */
+function cmdBrief() {
+  const soup = loadSoup();
+  console.log(JSON.stringify({
+    warning: '本段含湯底，不得複述、摘要或暗示給使用者',
+    bottom: soup.bottom,
+    kind: soup.kind,
+    lives: soup.lives,
+    elements: soup.elements,
+    '紅鯡魚': soup['紅鯡魚'],
+  }, null, 2));
 }
 
 async function cmdReveal(name) {
@@ -393,14 +461,18 @@ const HELP = `海龜湯 · 本機主持人 CLI
   wait <房號> [--soup <檔>] [--timeout 540]
                                           卡住等玩家提問，出現待答問題就印出 JSON 並結束
                                           給了 --soup 就順便補回不見的湯麵
-  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…"]
+  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>]
                                           回答一列。T/F/I 以外一律退回
+                                          給提示要同時指名要素圖的哪一格：
+                                          ${SLOTS.join('／')}
+  brief  --soup <檔>                      印出湯底與要素圖（⚠ 只給主持 subagent 跑）
   reveal <房號> <房號> --soup <檔>        揭曉湯底，房號要打兩次
 
   --host <網址>   目標站台，預設 ${BASE}
                   （也吃環境變數 SOUP_HOST）
 
-  湯底檔是 JSON：{ "surface": "湯麵", "bottom": "湯底", "lives": 6 }
+  湯底檔吃兩種格式：湯倉的遮蔽檔（.veil），或手寫的明文 JSON
+  { "surface": "湯麵", "bottom": "湯底", "lives": 6 }
   湯底除了 reveal 之外絕不上傳 —— 房裡的文件所有人都讀得到。`;
 
 try {
@@ -408,6 +480,7 @@ try {
     case 'init':   await cmdInit(room(rest[0])); break;
     case 'wait':   await cmdWait(room(rest[0])); break;
     case 'answer': await cmdAnswer(room(rest[0])); break;
+    case 'brief':  cmdBrief(); break;
     case 'reveal': await cmdReveal(room(rest[0])); break;
     default:
       console.log(HELP);

@@ -69,11 +69,15 @@ answers each question with `T` / `F` / `I`. The judgement is made by a local Cla
 changes and the Worker still makes no LLM calls — the model runs outside the request path.
 
 ```bash
-npm run host -- init   <room> --soup soups/<room>.json
-npm run host -- wait   <room> --soup soups/<room>.json     # blocks up to 9 min, prints pending questions
-npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.json [--note "…"]
-npm run host -- reveal <room> <room> --soup soups/<room>.json
+npm run host -- init   <room> --soup soups/<room>.veil
+npm run host -- wait   <room> --soup soups/<room>.veil     # blocks up to 9 min, prints pending questions
+npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.veil [--note "…"]
+npm run host -- brief  --soup soups/<room>.veil            # prints the solution; host subagent only
+npm run host -- reveal <room> <room> --soup soups/<room>.veil
 ```
+
+A soup file is either a pantry `.veil` file or a hand-written plain JSON
+`{ "surface": …, "bottom": …, "lives": 6 }`. Both are read the same way.
 
 ### The pantry
 
@@ -117,6 +121,28 @@ purpose: the threat model is a slip of the hand, not an attacker.
 Obscuring the files is only half of it. The other half is that the hosting loop runs in a subagent,
 so the solution never enters the main conversation where the user would read it. `brief` and `peek`
 are the two deliberate ways back in.
+
+### Hints
+
+A soup carries an element map — six slots from concrete to abstract (物件, 場景, 關鍵事件, 方法,
+身分關係, 動機), each with a direction phrase that points at the slot without naming its content.
+When a player asks for a hint the host walks the slots from the concrete end and names the first one
+that is neither reached nor already given away by the surface.
+
+Hints may quote words the room has already seen — "想想他為什麼要開燈" beats "想想動機" — so
+`tools/leak.mjs` strips quoted spans before checking the note against the solution. What it rejects
+is a note that carries in solution text the room does not have yet.
+
+That check only catches copying, though: a two-character fact restated in another phrasing shares no
+six-character span with the solution and slips through. So the hint channel is a whitelist rather
+than a blacklist, the same shape as the `T`/`F`/`I` rail on answers. `tools/vocab.mjs` tiles a note
+out of a fixed, version-controlled vocabulary plus the room's own text, and rejects it naming the
+first fragment it cannot cover. `--slot` is mandatory alongside `--note`, so every hint is charged to
+one element and the host picks from the map instead of composing prose.
+
+Neither layer understands meaning — room words can still be rearranged into a claim the room never
+made. What carries that weight is the rule in the skill: hints are the sentences written and checked
+at harvest time, and when a soup runs out of them the host gives no hint at all.
 
 ### Rules the checker does not hold
 

@@ -180,7 +180,8 @@
       doc.bottom = m.doc.bottom;
       // why = wipe：全房重設，正在打字的欄位也一併覆蓋
       render(!!m.why);
-      if (m.why) pending.clear();
+      if (m.why) { pending.clear(); inflight.clear(); }
+      else replay();   // 這份全量可能沒帶到我們剛送出、卻被空窗期丟掉的那幾筆
       keep();
       return;
     }
@@ -246,6 +247,7 @@
       if (!m) continue;
       const i = Number(m[1]);
       row(i)[m[2]] = op.v;
+      if (inflight.get(op.p) === op.v) inflight.delete(op.p);   // 回聲到了，這一筆確認送達
       paintRow(i);
     }
     if (structural) render(); else drawStatus();
@@ -290,29 +292,66 @@
     if (!timer) timer = setTimeout(flush, 350);
     keep();
   }
+  // 送出去但還沒被伺服器回聲確認的操作。
+  // 伺服器在「休眠醒來、等人補文件」的空窗期會默默丟掉 patch（見 worker/room.js），
+  // 所以送出不等於送到。確認前先留著，收到全量 sync 時重送。
+  const inflight = new Map();
+
   function flush() {
     timer = null;
     if (!pending.size) return;
     const ops = [...pending].map(([p, v]) => ({ p, v }));
     if (!send({ t: 'patch', ops })) return;   // 斷線時留在 pending，重連的 onopen 會再送
+    for (const [p, v] of pending) inflight.set(p, v);
     pending.clear();
+  }
+
+  /** 全量 sync 之後，把還沒被確認的修改補回去 —— 沒補的話那幾筆就真的消失了。 */
+  function replay() {
+    if (!inflight.size) return;
+    for (const [p, v] of inflight) if (!pending.has(p)) pending.set(p, v);
+    inflight.clear();
+    if (!timer) timer = setTimeout(flush, 50);
   }
 
   /* ── 本地編輯 ────────────────────── */
 
+  // 提問與註解邊打邊送的話，主持機器人會抓到打到一半的句子就作答 —— 實測就是這樣壞的。
+  // 所以未送出的文字**只留在 DOM 裡**，連 doc 都不寫：doc 會經由 sendSeed（房間醒來
+  // 要一份回去）與 sessionStorage 備份流出去，寫進 doc 等於還是漏了半句話出去。
   qlist.addEventListener('input', e => {
     const li = e.target.closest('.qrow');
     if (!li) return;
+    if (!e.target.classList.contains('qtext') && !e.target.classList.contains('qnote')) return;
+    const r = row(Number(li.dataset.i));
+    const typing = li.querySelector('.qtext').value;
+    li.classList.toggle('filled', !!(typing.trim() || r.a));
+  });
+
+  // 離開輸入框才把文字寫進 doc 並送出。到這一刻為止，這一列對房間與機器人都不存在。
+  qlist.addEventListener('focusout', e => {
+    const li = e.target.closest && e.target.closest('.qrow');
+    if (!li) return;
     const i = Number(li.dataset.i), r = row(i);
     if (e.target.classList.contains('qtext')) {
+      if (r.q === e.target.value) return;
       r.q = e.target.value;
       queue('rows.' + i + '.q', r.q);
-      li.classList.toggle('filled', alive(r));
-      drawStatus();
     } else if (e.target.classList.contains('qnote')) {
+      if (r.n === e.target.value) return;
       r.n = e.target.value;
       queue('rows.' + i + '.n', r.n);
-    }
+    } else return;
+    li.classList.toggle('filled', alive(r));
+    drawStatus();
+  });
+
+  // Enter 等於「我打完了」，不用真的把游標移開。
+  qlist.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    if (!e.target.classList.contains('qtext') && !e.target.classList.contains('qnote')) return;
+    e.preventDefault();
+    e.target.blur();
   });
 
   qlist.addEventListener('change', e => {
