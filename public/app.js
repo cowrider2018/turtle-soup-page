@@ -19,7 +19,8 @@
   const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'), count = $('count'),
         leftNum = $('left'), ghost = $('ghost'),
         stash = $('stash'), surface = $('surface'), bottom = $('bottom'),
-        veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts');
+        veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts'),
+        eyebrow = $('eyebrow');
 
   const pad = n => String(n).padStart(2, '0');
   // 用掉生命的條件：問了問題或收到回答。只寫註解不算。
@@ -241,7 +242,61 @@
     // 選單開著就別重畫：那等於使用者正在挑答案
     if (force || li.querySelector('.pick') !== openPick) paintPick(li, r.a);
     li.classList.toggle('filled', alive(r));
+    paintNote(i);
     grow(q); grow(n);
+  }
+
+  /* ── 主持端在不在 ──────────────────────
+     狀態由伺服器從「誰連著」推導（見 worker/room.js 的 here），所以主持行程一死，
+     綠燈自己就熄了 —— 沒有任何過期狀態要清。
+     ear＝有人掛著等問題，floor＝hold 守著房間、主持人還在準備，''＝沒有主持端。 */
+
+  const BADGE = {
+    '':      ['Lateral · Soup · Log', ''],
+    floor:   ['HOST IS LOADING', 'floor'],
+    ear:     ['BOT IS HOSTING', 'ear'],
+  };
+  // 主持人每答一列都要離開 wait 幾秒才回來。照實反映的話燈會一直閃，
+  // 所以綠燈熄掉前先撐一段時間，真的沒回來才認。
+  const EAR_GRACE = 15000;
+  let here = '', badge = '', graceTimer = null;
+
+  function setHere(v) {
+    here = BADGE[v] ? v : '';
+    if (here === 'ear') {
+      clearTimeout(graceTimer); graceTimer = null;
+      return paintHere(here);
+    }
+    if (badge === 'ear') {
+      if (!graceTimer) graceTimer = setTimeout(() => { graceTimer = null; paintHere(here); }, EAR_GRACE);
+      return;
+    }
+    if (!graceTimer) paintHere(here);
+  }
+
+  function paintHere(v) {
+    badge = BADGE[v] ? v : '';
+    const [text, tag] = BADGE[badge];
+    eyebrow.textContent = text;
+    eyebrow.dataset.here = tag;
+    for (let i = 0; i < qlist.children.length; i++) paintNote(i);
+  }
+
+  /* 有問題、還沒答的那一列，用註解欄的提示字告訴玩家該不該等。
+     寫的是 placeholder 不是值：它不是欄位內容，不會被同步、不會進 seed 與備份，
+     玩家一打字就消失，也不可能有人不小心把它送進房間。 */
+  function noteHint(r) {
+    if (!r || !r.q.trim() || r.a) return '註解';
+    if (badge === 'ear') return '🐢 host thinking...';
+    if (badge === 'floor') return '🐢 host loading...';
+    return 'no host online';
+  }
+
+  function paintNote(i) {
+    const li = qlist.children[i];
+    if (!li) return;
+    const n = li.querySelector('.qnote');
+    if (n) n.placeholder = noteHint(doc.rows[i]);
   }
 
   /* ── 輸入框跟著內容長高 ──────────────
@@ -398,6 +453,7 @@
       doc.surface = m.doc.surface;
       doc.bottom = m.doc.bottom;
       doc.ask = OFFER[m.doc.ask] ? m.doc.ask : '';
+      setHere(m.here || '');
       doc.want = m.doc.want === true;
       // why = wipe：全房重設，正在打字的欄位也一併覆蓋
       render(!!m.why);
@@ -416,6 +472,7 @@
       keep();
       return;
     }
+    if (m.t === 'here') { setHere(m.here || ''); return; }
     if (m.t === 'err') { onErr(m.code); return; }
   }
 

@@ -94,7 +94,14 @@ async function openWs(req, env, url) {
   if (!ID.test(id) || RESERVED.has(id)) return fail(400, 'bad_room');
 
   const room = env.ROOM.get(env.ROOM.idFromName(id));
-  const q = '&name=' + encodeURIComponent(id);   // DO 自己不知道房號，鎖房要用
+
+  // 主持端自報身分，房裡的人才知道現在有沒有人會回答（見 room.js 的 here）。
+  // 白名單兩個值，其餘一律當普通玩家 —— 這條路徑上的字串全是不可信輸入。
+  const asked = url.searchParams.get('role');
+  const role = asked === 'floor' || asked === 'ear' ? asked : '';
+
+  const q = '&name=' + encodeURIComponent(id)    // DO 自己不知道房號，鎖房要用
+    + (role ? '&role=' + role : '');
 
   // 第一趟只問「房間在不在」，不會建立任何東西
   const res = await room.fetch('https://room/ws?probe=1' + q, { headers: { Upgrade: 'websocket' } });

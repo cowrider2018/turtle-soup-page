@@ -240,6 +240,20 @@ client, so the document carries a state and nothing a compromised host could wri
 that could go dark again would say *the question you just asked was the wrong direction*, which is
 not what this channel is for.
 
+### Telling the player whether anyone is listening
+
+The host CLI announces itself on connect: `hold` joins as `floor`, `wait` as `ear`. The room
+derives presence from who is currently connected and broadcasts it, so the page can say
+`HOST IS LOADING` while the host is still starting up and `BOT IS HOSTING` once a `wait` is
+listening. Presence is deliberately not a document field: a document has no expiry, so a host
+that is killed or loses its network would leave a green light behind that nobody can clear. A
+connection cannot lie about being open. Roles ride on the socket via `serializeAttachment`, which
+is what makes them survive hibernation.
+
+A row that has a question and no answer shows what to expect in the note column — the host is
+thinking, the host is still starting, or nobody is hosting. That is a placeholder rendered from
+presence, never a value written into the document.
+
 ## Development
 
 ```bash

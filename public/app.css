@@ -68,6 +68,9 @@ body::after{
   color:var(--cyan);text-transform:uppercase;margin:0 0 6px;
   text-shadow:0 0 8px rgba(61,240,255,.8);padding-left:.42em;
 }
+/* 主持端在不在。顏色只是強調，字本身已經說完了 —— 不靠顏色傳遞資訊。 */
+.eyebrow[data-here="floor"]{color:var(--rose);text-shadow:0 0 8px rgba(255,45,126,.8)}
+.eyebrow[data-here="ear"]{color:var(--lime);text-shadow:0 0 8px rgba(166,255,77,.8)}
 h1{
   font-family:var(--serif);font-weight:900;
   font-size:clamp(2rem,7vw,3.1rem);

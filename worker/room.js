@@ -22,6 +22,7 @@ export class Room {
     this.buckets = new Map();   // ws -> {t, at}；休眠後重建，重建即滿桶
     this.flags = null;          // {locked, frozen}，每個實例只讀一次
     this.seeding = 0;           // 上次向客戶端求救的時間
+    this.told = undefined;      // 上次廣播出去的主持端狀態；休眠後重來一次不影響正確性
   }
 
   /**
@@ -36,7 +37,9 @@ export class Room {
 
   async fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname === '/ws') return this.connect(url.searchParams.get('create') === '1');
+    if (url.pathname === '/ws') {
+      return this.connect(url.searchParams.get('create') === '1', url.searchParams.get('role') || '');
+    }
     if (url.pathname === '/admin') return this.admin(url.searchParams);
     return new Response('not found', { status: 404 });
   }
@@ -44,7 +47,7 @@ export class Room {
   sockets() { return this.state.getWebSockets(); }
 
   // ── 連線 ────────────────────────────
-  async connect(mayCreate) {
+  async connect(mayCreate, role) {
     const live = this.sockets().length;
 
     // 手上沒文件又沒人在線＝這間房不存在。不自己開，先回報給 Worker，
@@ -65,7 +68,11 @@ export class Room {
 
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
+    // 身分要存在連線上，不能存在實例欄位裡 —— 物件休眠後醒來，實例欄位沒了，
+    // 連線還在，那時候只有 attachment 說得出誰是主持端。
+    if (role === 'floor' || role === 'ear') pair[1].serializeAttachment({ role });
     this.sendSync(pair[1]);
+    this.tellHere();
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -126,9 +133,44 @@ export class Room {
 
   // hollow 一定要跟著送，否則客戶端會拿這份空的把自己手上的內容蓋掉
   sendSync(ws) {
-    const msg = { t: 'sync', doc: this.doc, lim: LIM, hollow: this.isHollow() || undefined };
+    const msg = {
+      t: 'sync', doc: this.doc, lim: LIM,
+      here: this.here(), hollow: this.isHollow() || undefined,
+    };
     try { ws.send(JSON.stringify(msg)); } catch { /* 已斷線 */ }
   }
+
+  /* ── 主持端在不在 ──────────────────────
+   *
+   * 這件事刻意不放進文件：文件沒有 TTL，主持行程被 kill、網路斷掉、筆電闔上，
+   * 最後寫進去的「在線」會永遠留著，玩家看著綠燈卻等不到人。從連線推導就不會說謊 ——
+   * 行程沒了連線就沒了，狀態自動歸零，也沒有任何清理邏輯要維護。
+   *
+   * ear（wait 掛著，問題一到就有人判）優先於 floor（hold 守著房間，主持人還在準備）。
+   */
+  here(skip) {
+    let floor = false;
+    for (const ws of this.sockets()) {
+      if (ws === skip) continue;
+      let att = null;
+      try { att = ws.deserializeAttachment(); } catch { /* 沒帶身分的普通玩家 */ }
+      const role = att && att.role;
+      if (role === 'ear') return 'ear';
+      if (role === 'floor') floor = true;
+    }
+    return floor ? 'floor' : '';
+  }
+
+  /** 只在真的變了才廣播。斷線那一刻 skip 掉正在關的那條，否則它會被算進在場。 */
+  tellHere(skip) {
+    const here = this.here(skip);
+    if (here === this.told) return;
+    this.told = here;
+    this.blast({ t: 'here', here });
+  }
+
+  webSocketClose(ws) { this.tellHere(ws); }
+  webSocketError(ws) { this.tellHere(ws); }
 
   // ── 記憶體掉了之後的補救 ──────────────
   askSeed() {

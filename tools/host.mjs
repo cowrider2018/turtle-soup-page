@@ -133,14 +133,19 @@ function exposedIn(doc) {
 
 /* ── 連線 ─────────────────────────── */
 
-function endpoints(name) {
+/**
+ * role 是自報身分，房間拿它算出「現在有沒有人會回答」並廣播給玩家：
+ * ear＝掛著等問題（wait），floor＝守著房間（hold）。其餘指令都是短命連線，
+ * 不報身分 —— 它們連上又走，報了只會讓玩家那顆燈亂閃。
+ */
+function endpoints(name, role) {
   let u;
   try { u = new URL(BASE); }
   catch { return die('--host 不是合法網址：' + BASE); }
   const ws = new URL(u.href);
   ws.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
   ws.pathname = '/ws';
-  ws.search = '?r=' + encodeURIComponent(name);
+  ws.search = '?r=' + encodeURIComponent(name) + (role ? '&role=' + role : '');
   return { url: ws.href, origin: u.origin };
 }
 
@@ -162,8 +167,8 @@ function hasContent(d) {
  * 注意：Worker 那邊只要房間不存在就會當場開房（見 worker/index.js 的 openWs），
  * 客戶端無從選擇，所以打錯房號等於開了一間空房 —— 沒人在線它就會自己消失。
  */
-function connect(name) {
-  const { url, origin } = endpoints(name);
+function connect(name, role) {
+  const { url, origin } = endpoints(name, role);
   const doc = EMPTY();
   const listeners = [];
 
@@ -301,7 +306,7 @@ async function cmdHold(name) {
 
   while (Date.now() < until) {
     let s;
-    try { s = await connect(name); }
+    try { s = await connect(name, 'floor'); }
     catch (e) { console.error('· 連不上，5 秒後重試：' + e.message); await nap(5000); continue; }
     laps++;
     if (await restoreSurface(s, soup)) fixes++;
@@ -392,7 +397,7 @@ async function cmdWait(name) {
   if (!Number.isFinite(secs) || secs < 1 || secs > 3600) die('--timeout 要是 1 到 3600 秒');
 
   const soup = loadSoup(false);
-  const s = await connect(name);
+  const s = await connect(name, 'ear');
   await restoreSurface(s, soup);
 
   // 玩家在房間裡按了「揭曉湯底」。湯底只在本機，房間自己揭不了，所以這裡也要醒。
