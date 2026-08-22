@@ -128,16 +128,25 @@ export class Room {
   wipe() {
     this.seeding = 0;
     this.doc = wipeDoc(this.doc || newDoc());
-    this.blast({ t: 'sync', doc: this.doc, lim: LIM, why: 'wipe' });
+    this.blast(this.syncMsg('wipe'));
   }
 
-  // hollow 一定要跟著送，否則客戶端會拿這份空的把自己手上的內容蓋掉
-  sendSync(ws) {
-    const msg = {
+  /**
+   * 每一則 sync 都要長得一樣。
+   *
+   * 少帶 here 的那種曾經存在過：清空與 seed 各自組了自己的訊息，於是房間每被補一次，
+   * 所有人的主持端狀態就被那份殘缺的 sync 歸零一次 —— 玩家看到的是「沒有主持人」，
+   * 但主持人一直都在。少帶 hollow 更糟：客戶端會拿空文件蓋掉自己手上的內容。
+   */
+  syncMsg(why) {
+    return {
       t: 'sync', doc: this.doc, lim: LIM,
-      here: this.here(), hollow: this.isHollow() || undefined,
+      here: this.here(), hollow: this.isHollow() || undefined, why,
     };
-    try { ws.send(JSON.stringify(msg)); } catch { /* 已斷線 */ }
+  }
+
+  sendSync(ws) {
+    try { ws.send(JSON.stringify(this.syncMsg())); } catch { /* 已斷線 */ }
   }
 
   /* ── 主持端在不在 ──────────────────────
@@ -190,7 +199,7 @@ export class Room {
     if (!doc) return this.err(ws, 'bad_seed');
     this.doc = doc;
     this.seeding = 0;                          // 補齊了，關掉窗口
-    this.blast({ t: 'sync', doc, lim: LIM });
+    this.blast(this.syncMsg());
   }
 
   // 不特別在最後一人離線時清掉文件：物件閒置後本來就會被回收，記憶體跟著沒。

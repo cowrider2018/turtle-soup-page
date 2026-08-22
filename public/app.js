@@ -453,7 +453,8 @@
       doc.surface = m.doc.surface;
       doc.bottom = m.doc.bottom;
       doc.ask = OFFER[m.doc.ask] ? m.doc.ask : '';
-      setHere(m.here || '');
+      // 只有真的帶了這個欄位才更新：殘缺的 sync 不該把主持端狀態歸零
+      if ('here' in m) setHere(m.here || '');
       doc.want = m.doc.want === true;
       // why = wipe：全房重設，正在打字的欄位也一併覆蓋
       render(!!m.why);
