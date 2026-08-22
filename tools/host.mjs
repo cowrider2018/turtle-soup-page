@@ -21,7 +21,8 @@
  *   1. 回答只接受 T / F / I，且不可為空。被劫持的模型能洩漏的上限就是每題 log2(3) bit。
  *   2. 註解只在玩家自己開口要提示的那一列才寫得進去。
  *   3. 註解送出前跟湯底做 n-gram 比對，重疊就整筆退回。
- *   4. 揭曉湯底是獨立指令、房號要打兩次，不放進主持迴圈。
+ *   4. 揭曉湯底不由主持人自己決定：reveal 是獨立指令、房號要打兩次；
+ *      wait 只有在玩家於房間裡按下「揭曉湯底」（want）之後才會代為揭底。
  */
 
 import { readFileSync } from 'node:fs';
@@ -40,10 +41,15 @@ function flag(name, fallback) {
   if (v === undefined || v.startsWith('--')) die('--' + name + ' 後面要接一個值');
   return v;
 }
+const BOOL = new Set(['hold']);                        // 這些旗標不吃值
+const has = name => argv.includes('--' + name);
 const positional = (() => {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith('--')) { i++; continue; }   // 旗標一律吃掉後面那個值
+    if (argv[i].startsWith('--')) {
+      if (!BOOL.has(argv[i].slice(2))) i++;             // 其餘旗標吃掉後面那個值
+      continue;
+    }
     out.push(argv[i]);
   }
   return out;
@@ -137,7 +143,7 @@ function endpoints(name) {
   return { url: ws.href, origin: u.origin };
 }
 
-const EMPTY = () => ({ rev: 0, lives: 6, rows: [], surface: '', bottom: '' });
+const EMPTY = () => ({ rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: false, want: false });
 
 function grow(rows, i) {
   while (rows.length <= i) rows.push({ q: '', a: '', n: '' });
@@ -195,6 +201,7 @@ function connect(name) {
       if (m.t === 'sync') {
         Object.assign(doc, {
           rev: m.doc.rev, lives: m.doc.lives, surface: m.doc.surface, bottom: m.doc.bottom,
+          ask: m.doc.ask === true, want: m.doc.want === true,
           rows: (m.doc.rows || []).map(r => ({ q: r.q || '', a: r.a || '', n: r.n || '' })),
         });
         // hollow＝房間剛醒來、手上是空的，正在跟其他人要一份回來。
@@ -211,7 +218,8 @@ function connect(name) {
       } else if (m.t === 'patch') {
         doc.rev = m.rev;
         for (const op of m.ops) {
-          if (op.p === 'lives' || op.p === 'surface' || op.p === 'bottom') { doc[op.p] = op.v; continue; }
+          if (op.p === 'lives' || op.p === 'surface' || op.p === 'bottom'
+            || op.p === 'ask' || op.p === 'want') { doc[op.p] = op.v; continue; }
           const g = /^rows\.(\d{1,3})\.(q|a|n)$/.exec(op.p);
           if (g) grow(doc.rows, Number(g[1]))[g[2]] = op.v;
         }
@@ -287,6 +295,30 @@ async function cmdInit(name) {
 }
 
 /** 有問題但還沒答的列。 */
+/**
+ * 要素圖裡「非空」的格是不是都已經解開了？
+ *
+ * 解開的定義跟提示的掃描規則同一套：該格的觸及詞出現在**拿到 T** 的提問裡。
+ * 湯麵就已經揭露的格算送分 —— 玩家本來就知道，不該擋著整張圖。
+ *
+ * 判定放在程式裡而不是模型裡，是為了不飄：同一局裡「線索夠不夠」每答一列重算一次，
+ * 交給模型自由心證的話，第 12 列說夠了、第 13 列又說不夠。
+ */
+function coverage(doc, elements) {
+  const el = elements || {};
+  const yes = doc.rows.filter(r => r.a === 'T' && r.q.trim()).map(r => bare(r.q));
+  const solved = [], open = [];
+  for (const slot of SLOTS) {
+    const cell = el[slot];
+    if (!cell) continue;                                  // 空格不算在內
+    if (cell['已揭露'] === true) { solved.push(slot); continue; }
+    const words = (Array.isArray(cell['觸及詞']) ? cell['觸及詞'] : [cell['觸及詞']])
+      .map(w => bare(String(w || ''))).filter(Boolean);
+    (words.length && yes.some(q => words.some(w => q.includes(w))) ? solved : open).push(slot);
+  }
+  return { covered: solved.length > 0 && open.length === 0, solved, open };
+}
+
 function pendingOf(doc) {
   const out = [];
   for (let i = 0; i < doc.rows.length && i < doc.lives; i++) {
@@ -304,17 +336,30 @@ async function cmdWait(name) {
   const s = await connect(name);
   await restoreSurface(s, soup);
 
+  // 玩家在房間裡按了「揭曉湯底」。湯底只在本機，房間自己揭不了，所以這裡也要醒。
+  // 揭完之後 want 仍然是 true（它單向鎖定），所以條件要看湯底寫進去了沒有 ——
+  // 只看 want 的話，下一次 wait 會立刻返回，主持迴圈就變成空轉。
+  const owed = d => d.want === true && soup && soup.bottom && d.bottom !== soup.bottom;
+
   const pending = await new Promise(resolve => {
     const now = pendingOf(s.doc);
-    if (now.length) return resolve(now);
+    if (now.length || owed(s.doc)) return resolve(now);
 
     const timer = setTimeout(() => resolve([]), secs * 1000);
     s.on(m => {
       if (m.t === 'closed') { clearTimeout(timer); return resolve([]); }
       const p = pendingOf(s.doc);
-      if (p.length) { clearTimeout(timer); resolve(p); }
+      if (p.length || owed(s.doc)) { clearTimeout(timer); resolve(p); }
     });
   });
+
+  // 授權來自玩家按下去的那一下，所以這裡直接揭，不再回頭問主持人 ——
+  // 中間多一次判斷，玩家就要多等一輪 wait 才看得到湯底。
+  let revealed = false;
+  if (owed(s.doc)) {
+    await commit(s, [{ p: 'bottom', v: soup.bottom }], d => d.bottom === soup.bottom);
+    revealed = true;
+  }
   s.close();
 
   // 給 Claude Code 讀的：整局的來龍去脈都在這裡，但湯底不在（湯底在本機檔案）。
@@ -322,6 +367,9 @@ async function cmdWait(name) {
     room: name,
     rev: s.doc.rev,
     lives: s.doc.lives,
+    ask: s.doc.ask === true,        // 揭底提議已經亮起
+    want: s.doc.want === true,      // 玩家按了揭曉
+    revealed,                       // 這一輪剛把湯底寫進房間
     surface: s.doc.surface,
     history: s.doc.rows
       .map((r, i) => ({ row: i + 1, q: r.q, a: r.a, n: r.n }))
@@ -416,9 +464,21 @@ async function cmdAnswer(name) {
   }
 
   await commit(s, ops, d => d.rows[i] && d.rows[i].a === a);
+
+  // 答完這一列，重算一次覆蓋。整張要素圖都解開了就把揭底提議點亮，
+  // 房間會跳出「你已經猜出夠多線索，要揭曉湯底嗎？」——按不按是玩家的事。
+  const cov = coverage(s.doc, soup.elements);
+  let lit = false;
+  if (cov.covered && s.doc.ask !== true && !has('hold')) {
+    await commit(s, [{ p: 'ask', v: true }], d => d.ask === true);
+    lit = true;
+  }
   s.close();
 
   console.log('✓ 第 ' + n + ' 列已回答 ' + a + (note ? '（附提示）' : ''));
+  if (lit) console.log('  要素圖已全部解開，房裡跳出了揭底提議。');
+  else if (cov.covered && has('hold')) console.log('  （--hold：機械判定已覆蓋，但你判斷玩家還沒真的懂，提議沒有點亮）');
+  else if (!cov.covered) console.log('  尚未解開：' + cov.open.join('、'));
 }
 
 /**
@@ -460,11 +520,13 @@ const HELP = `海龜湯 · 本機主持人 CLI
   init <房號> --soup <檔>                 出題：把湯麵與生命數寫進房間，湯底留在本機
   wait <房號> [--soup <檔>] [--timeout 540]
                                           卡住等玩家提問，出現待答問題就印出 JSON 並結束
-                                          給了 --soup 就順便補回不見的湯麵
-  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>]
+                                          給了 --soup 就順便補回不見的湯麵；
+                                          玩家按了「揭曉湯底」也會醒，並代為揭底
+  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>] [--hold]
                                           回答一列。T/F/I 以外一律退回
                                           給提示要同時指名要素圖的哪一格：
                                           ${SLOTS.join('／')}
+                                          要素圖全解開就點亮揭底提議；--hold 這次不點亮
   brief  --soup <檔>                      印出湯底與要素圖（⚠ 只給主持 subagent 跑）
   reveal <房號> <房號> --soup <檔>        揭曉湯底，房號要打兩次
 

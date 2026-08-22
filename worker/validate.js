@@ -14,7 +14,7 @@ export const LIM = {
   peers: 32,          // 單房同時連線數
 };
 
-const PATH = /^(?:lives|surface|bottom|rows\.(\d{1,3})\.(q|a|n))$/;
+const PATH = /^(?:lives|surface|bottom|ask|want|rows\.(\d{1,3})\.(q|a|n))$/;
 
 // 保留 \t \n，其餘控制字元、零寬字元、雙向控制字元一律移除。
 // 這不是 XSS 防線（XSS 靠「遠端字串永不進 innerHTML」擋），只是避免不可見字元汙染文件。
@@ -29,7 +29,7 @@ const enc = new TextEncoder();
 const chars = s => [...s].length;
 
 export function newDoc() {
-  return { rev: 0, lives: 6, rows: [], surface: '', bottom: '', updatedAt: Date.now() };
+  return { rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: false, want: false, updatedAt: Date.now() };
 }
 
 function text(v, max, singleLine) {
@@ -50,6 +50,12 @@ function field(path, v) {
   if (path === 'q') return text(v, LIM.q, true);
   if (path === 'n') return text(v, LIM.n, true);
   if (path === 'a') return (v === '' || v === 'T' || v === 'F' || v === 'I') ? v : null;
+
+  // 揭底提議（ask，主持人寫）與揭底請求（want，玩家寫）都只收 true。
+  // 收不到 false 就是單向鎖定：提議一旦亮起就熄不掉。這是刻意的 ——
+  // 「亮了又熄」會透露剛才那一題問錯了方向，而這個通道只該帶一個 bit。
+  if (path === 'ask' || path === 'want') return v === true ? true : null;
+
   return null;
 }
 
@@ -73,6 +79,8 @@ export function applyPatch(prev, ops) {
     rows: prev.rows.map(r => ({ q: r.q, a: r.a, n: r.n })),
     surface: prev.surface,
     bottom: prev.bottom,
+    ask: prev.ask === true,
+    want: prev.want === true,
     updatedAt: prev.updatedAt,
   };
   const clean = [];
@@ -107,7 +115,7 @@ export function applyPatch(prev, ops) {
 
 /** 清空：保留生命數，其餘歸零。 */
 export function wipeDoc(prev) {
-  return { rev: prev.rev + 1, lives: prev.lives, rows: [], surface: '', bottom: '', updatedAt: Date.now() };
+  return { rev: prev.rev + 1, lives: prev.lives, rows: [], surface: '', bottom: '', ask: false, want: false, updatedAt: Date.now() };
 }
 
 /** 這份文件裡有東西嗎？用來判斷該不該拿客戶端那份來補。 */
@@ -140,7 +148,9 @@ export function sanitizeDoc(raw) {
   }
 
   const rev = Number.isInteger(raw.rev) && raw.rev >= 0 && raw.rev < 1e9 ? raw.rev : 0;
-  const doc = { rev, lives, rows, surface, bottom, updatedAt: Date.now() };
+  // 補文件只發生在伺服器手上是空的時候，所以這裡照收客戶端的旗標 ——
+  // 沒有舊值會被它蓋掉，單向鎖定不受影響。
+  const doc = { rev, lives, rows, surface, bottom, ask: raw.ask === true, want: raw.want === true, updatedAt: Date.now() };
   if (enc.encode(JSON.stringify(doc)).length > LIM.docBytes) return null;
   return doc;
 }

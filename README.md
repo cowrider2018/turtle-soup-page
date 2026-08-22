@@ -205,10 +205,23 @@ leak the solution:
 |---|---|
 | Model coerced into revealing the solution | Answers are parsed against the `T`/`F`/`I` allow-list and must be non-empty; the leak budget is log₂3 bits per question, which is the game itself |
 | Free-text note used as the leak channel | A note is accepted only on a row where the player asked for a hint, and is rejected if it shares a 6-character run with the local solution |
-| Injection triggering the reveal | `reveal` is a separate operator command requiring the room name twice, and is kept out of the hosting loop |
+| Injection triggering the reveal | A reveal has two lawful starts, and the model is neither: the operator running `reveal` with the room name twice, or a player pressing the reveal button in the room. The host CLI has no command that writes `want`, so the model cannot press that button on the player's behalf |
 
 Because the document is memory-only, a room that empties out loses the puzzle. Passing `--soup` to
 `wait` and `answer` restores `surface` whenever the room comes back without it.
+
+### Offering the reveal
+
+Once every non-empty slot of the element map has been solved — a slot counts as solved when one of
+its reach words appears in a question that got a `T` — `answer` sets `ask` on the document and the
+room offers: *you have worked out enough, shall the solution be revealed?* Taking the offer sets
+`want`, and the next `wait` writes the solution into the room, because the solution exists only on
+the host's disk and the room cannot reveal itself.
+
+Both fields are booleans that accept only `true`, so the offer latches on. A flag that could go
+dark again would say *the question you just asked was the wrong direction*, which is a second bit
+this channel is not meant to carry. The wording lives in the client, so the document carries one
+bit and nothing a compromised host could write into it.
 
 ## Development
 

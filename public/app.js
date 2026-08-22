@@ -7,7 +7,7 @@
   'use strict';
 
   const LIM = { livesMin: 1, livesMax: 300, rows: 300, q: 300, n: 200 };
-  const doc = { rev: 0, lives: 6, rows: [], surface: '', bottom: '' };
+  const doc = { rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: false, want: false };
 
   const $ = id => document.getElementById(id);
   const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'), count = $('count'),
@@ -391,11 +391,14 @@
       doc.rows = m.doc.rows.map(r => ({ q: r.q, a: r.a, n: r.n }));
       doc.surface = m.doc.surface;
       doc.bottom = m.doc.bottom;
+      doc.ask = m.doc.ask === true;
+      doc.want = m.doc.want === true;
       // why = wipe：全房重設，正在打字的欄位也一併覆蓋
       render(!!m.why);
       if (m.why) { pending.clear(); inflight.clear(); }
       else replay();   // 這份全量可能沒帶到我們剛送出、卻被空窗期丟掉的那幾筆
       keep();
+      offerReveal();   // 中途進房、或重整回來，該問的還是要問
       return;
     }
     if (m.t === 'need') { sendSeed(); return; }
@@ -446,24 +449,30 @@
         rows: d.rows.map(r => ({ q: r.q || '', a: r.a || '', n: r.n || '' })),
         surface: d.surface || '',
         bottom: d.bottom || '',
+        ask: d.ask === true,
+        want: d.want === true,
       };
     } catch { return null; }
   })();
 
   function applyOps(ops) {
-    let structural = false;
+    let structural = false, offer = false;
     for (const op of ops) {
       if (op.p === 'lives') { doc.lives = op.v; structural = true; continue; }
       if (op.p === 'surface') { doc.surface = op.v; put(surface, op.v); grow(surface); continue; }
       if (op.p === 'bottom') { doc.bottom = op.v; put(bottom, op.v); grow(bottom); continue; }
+      if (op.p === 'ask') { doc.ask = op.v; offer = true; continue; }
+      if (op.p === 'want') { doc.want = op.v; if (inflight.get(op.p) === op.v) inflight.delete(op.p); continue; }
       const m = /^rows\.(\d{1,3})\.(q|a|n)$/.exec(op.p);
       if (!m) continue;
       const i = Number(m[1]);
       row(i)[m[2]] = op.v;
       if (inflight.get(op.p) === op.v) inflight.delete(op.p);   // 回聲到了，這一筆確認送達
+      if (m[2] === 'a' && op.v) offer = true;                   // 又答完一列，再問一次
       paintRow(i);
     }
     if (structural) render(); else drawStatus();
+    if (offer) offerReveal();
   }
 
   // 同一種錯誤 60 秒內只提示一次，否則邊打字邊彈視窗會沒完沒了
@@ -642,6 +651,21 @@
 
   const note = (t, x) => ask(t, x, [{ label: '知道了' }]);
   function fatal(t, x) { dead = true; if (ws) ws.close(); ask(t, x, [], true); }
+
+  /* 主持人認定線索已經夠了就會把 ask 點亮，然後每答完一列再問一次 ——
+     選了「繼續玩」也不會關掉它，是刻意的：想揭的時候不必去找按鈕，
+     畫面上也就不必為了這件事多長出一顆常駐按鈕來。
+
+     湯底不在伺服器上，所以這裡按下去只是把 want 寫進房間；真正把湯底寫回來的是
+     主持人那一端（tools/host.mjs 的 wait 收到 want 就揭）。按下去到湯底出現會差幾秒。 */
+  function offerReveal() {
+    if (!doc.ask || doc.want) return;
+    if (veil.classList.contains('open')) return;   // 已經有別的視窗開著，不要蓋掉
+    ask('你已經猜出夠多線索', '要揭曉湯底嗎？', [
+      { label: '揭曉湯底', run: () => { doc.want = true; queue('want', true); } },
+      { label: '繼續玩' },
+    ]);
+  }
 
   function outOfLives() {
     ask('燈全滅了', '生命已經用完。', [
