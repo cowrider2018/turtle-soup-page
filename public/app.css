@@ -245,7 +245,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   color:#b9b1d8;font-size:.84rem;
 }
 .qrow .qnote::placeholder{color:#453e60}
-.qrow .qnote:focus{
+/* 提問、註解、答案的焦點都用紫：這一整塊在紫色面板裡，藍會跳出來 */
+.qrow .qtext:focus,.qrow .qnote:focus{
   border-color:var(--violet);
   box-shadow:0 0 0 1px var(--violet),0 0 16px rgba(160,107,255,.26),inset 0 0 20px rgba(160,107,255,.06);
 }
@@ -272,7 +273,7 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 .pick-btn:hover{border-color:rgba(125,115,180,.5)}
 .pick-btn:focus-visible{outline:none}
 .pick-btn:focus-visible,.pick[data-open] .pick-btn{
-  border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 16px rgba(61,240,255,.22);
+  border-color:var(--violet);box-shadow:0 0 0 1px var(--violet),0 0 16px rgba(160,107,255,.24);
 }
 .pick[data-a="T"] .pick-btn{color:var(--lime);border-color:rgba(166,255,77,.55);box-shadow:0 0 12px rgba(166,255,77,.2)}
 .pick[data-a="F"] .pick-btn{color:var(--rose);border-color:rgba(255,45,126,.55);box-shadow:0 0 12px rgba(255,45,126,.2)}
@@ -296,8 +297,8 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 .pick-opt[data-v="T"]{color:var(--lime)}
 .pick-opt[data-v="F"]{color:var(--rose)}
 .pick-opt[data-v="I"]{color:var(--amber)}
-.pick-opt:hover,.pick-opt.on{background:rgba(61,240,255,.10)}
-.pick-opt.on{box-shadow:inset 2px 0 0 var(--cyan)}
+.pick-opt:hover,.pick-opt.on{background:rgba(160,107,255,.14)}
+.pick-opt.on{box-shadow:inset 2px 0 0 var(--violet)}
 /* 目前這一題的答案：左邊留一個記號，跟游標所在的那一項分得開 */
 .pick-opt[aria-selected="true"]{background:rgba(125,115,180,.12)}
 .stash{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:var(--amber);margin:14px 0 0;opacity:.85}
