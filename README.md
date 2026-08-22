@@ -70,6 +70,7 @@ changes and the Worker still makes no LLM calls — the model runs outside the r
 
 ```bash
 npm run host -- init   <room> --soup soups/<room>.veil
+npm run host -- hold   <room> --soup soups/<room>.veil     # run in the background: keeps a client in the room
 npm run host -- wait   <room> --soup soups/<room>.veil     # blocks up to 9 min, prints pending questions
 npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.veil [--note "…"]
 npm run host -- brief  --soup soups/<room>.veil            # prints the solution; host subagent only
@@ -209,6 +210,13 @@ leak the solution:
 
 Because the document is memory-only, a room that empties out loses the puzzle. Passing `--soup` to
 `wait` and `answer` restores `surface` whenever the room comes back without it.
+
+That repair only runs when the host next connects, and the host is a short-lived client: `init`,
+`wait` and `answer` each connect, write and leave. Between posting the puzzle and the player
+opening the page — and again between each answered row and the next `wait` — nobody holds the room,
+so it can evaporate and the player arrives to an empty page. `hold` is the floor: it stays
+connected, reconnects itself, and re-posts the surface whenever the room comes back without one.
+Start it in the background right after `init` and leave it running for the game.
 
 ### Offering the reveal
 

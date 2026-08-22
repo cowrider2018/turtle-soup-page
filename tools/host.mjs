@@ -7,6 +7,7 @@
  *
  * 用法：
  *   npm run host -- init <房號> --soup <湯底檔>
+ *   npm run host -- hold <房號> --soup <湯底檔>   （背景跑，當房間的地板）
  *   npm run host -- wait <房號> [--timeout 540]
  *   npm run host -- answer <房號> <列號> <T|F|I> [--note "…"] --soup <湯底檔>
  *   npm run host -- reveal <房號> <房號> --soup <湯底檔>
@@ -276,6 +277,55 @@ async function restoreSurface(session, soup) {
   return true;
 }
 
+/**
+ * 房間的地板。
+ *
+ * 房間的文件只活在 DO 的記憶體裡，沒有客戶端在線就隨時會蒸發。主持人是短命客戶端
+ * —— init、wait、answer 各連一次就走 —— 所以從出題到玩家開頁面之間、以及每答完一列
+ * 到下一次 wait 之間，房間都是沒有地板的：那幾秒到幾分鐘裡房間掉了，玩家開進去就是空房。
+ *
+ * 這支指令就是那塊地板：連上就不放，斷了自己接回來，發現湯麵不見了就補回去。
+ * 開局時在背景起一支，整局都有人在線。
+ *
+ * 它一樣不補列 —— 列歸玩家的瀏覽器保管（見 connect 裡 need 那段的說明）。
+ */
+async function cmdHold(name) {
+  const soup = loadSoup();
+  const minutes = Number(flag('minutes', '180'));
+  if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) die('--minutes 要是 1 到 1440');
+  const until = Date.now() + minutes * 60000;
+  const nap = ms => new Promise(r => setTimeout(r, ms));
+
+  console.log('· 守著 ' + name + '（' + minutes + ' 分鐘，Ctrl-C 可以提早收）');
+  let laps = 0, fixes = 0;
+
+  while (Date.now() < until) {
+    let s;
+    try { s = await connect(name); }
+    catch (e) { console.error('· 連不上，5 秒後重試：' + e.message); await nap(5000); continue; }
+    laps++;
+    if (await restoreSurface(s, soup)) fixes++;
+
+    // 掛著，直到斷線或時間到。房間醒來空的時候會再補一次湯麵 ——
+    // 補救動作放在監聽器裡，用 busy 擋住重入，免得同一次空窗補好幾遍。
+    let busy = false;
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, Math.max(0, until - Date.now()));
+      s.on(async m => {
+        if (m.t === 'closed') { clearTimeout(timer); return resolve(); }
+        if (busy || s.doc.surface) return;
+        busy = true;
+        try { if (await restoreSurface(s, soup)) fixes++; }
+        catch (e) { console.error('· 補湯麵失敗：' + e.message); }
+        busy = false;
+      });
+    });
+    s.close();
+  }
+
+  console.log('✓ 不守了：' + name + '（連線 ' + laps + ' 次，補回湯麵 ' + fixes + ' 次）');
+}
+
 async function cmdInit(name) {
   const soup = loadSoup();
   const s = await connect(name);
@@ -536,6 +586,9 @@ async function cmdReveal(name) {
 const HELP = `海龜湯 · 本機主持人 CLI
 
   init <房號> --soup <檔>                 出題：把湯麵與生命數寫進房間，湯底留在本機
+  hold <房號> --soup <檔> [--minutes 180]
+                                          當房間的地板：連著不放，房間空了就補回湯麵
+                                          開局時在背景起一支，整局都有客戶端在線
   wait <房號> [--soup <檔>] [--timeout 540]
                                           卡住等玩家提問，出現待答問題就印出 JSON 並結束
                                           給了 --soup 就順便補回不見的湯麵；
@@ -560,6 +613,7 @@ const HELP = `海龜湯 · 本機主持人 CLI
 try {
   switch (cmd) {
     case 'init':   await cmdInit(room(rest[0])); break;
+    case 'hold':   await cmdHold(room(rest[0])); break;
     case 'wait':   await cmdWait(room(rest[0])); break;
     case 'answer': await cmdAnswer(room(rest[0])); break;
     case 'brief':  cmdBrief(); break;
