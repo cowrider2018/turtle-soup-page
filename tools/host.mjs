@@ -8,8 +8,8 @@
  * 用法：
  *   npm run host -- init <房號> --soup <湯底檔>
  *   npm run host -- hold <房號> --soup <湯底檔>   （背景跑，當房間的地板）
- *   npm run host -- wait <房號> [--timeout 540]
- *   npm run host -- answer <房號> <列號> <T|F|I> [--note "…"] --soup <湯底檔>
+ *   npm run host -- wait <房號> [--timeout 100]
+ *   npm run host -- answer <房號> <列號> <T|F|I> [--note "…"] [--then] --soup <湯底檔>
  *   npm run host -- reveal <房號> <房號> --soup <湯底檔>
  *
  *   --host <網址>   目標站台，預設 http://127.0.0.1:8787（wrangler dev），
@@ -42,7 +42,7 @@ function flag(name, fallback) {
   if (v === undefined || v.startsWith('--')) die('--' + name + ' 後面要接一個值');
   return v;
 }
-const BOOL = new Set(['hold', 'covered']);             // 這些旗標不吃值
+const BOOL = new Set(['hold', 'covered']);             // 這些旗標不吃值（--then 可帶秒數，不算在內）
 const has = name => argv.includes('--' + name);
 const positional = (() => {
   const out = [];
@@ -72,6 +72,7 @@ const TAG = '🐢 ';           // 機器回答的識別前綴
 const HINT = /提示|線索|hint|給點|給個|clue/i;
 
 const chars = s => [...s].length;
+const nap = ms => new Promise(r => setTimeout(r, ms));
 
 function die(msg) {
   console.error('✗ ' + msg);
@@ -299,7 +300,6 @@ async function cmdHold(name) {
   const minutes = Number(flag('minutes', '180'));
   if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) die('--minutes 要是 1 到 1440');
   const until = Date.now() + minutes * 60000;
-  const nap = ms => new Promise(r => setTimeout(r, ms));
 
   console.log('· 守著 ' + name + '（' + minutes + ' 分鐘，Ctrl-C 可以提早收）');
   let laps = 0, fixes = 0;
@@ -392,58 +392,107 @@ function pendingOf(doc) {
   return out;
 }
 
-async function cmdWait(name) {
-  const secs = Number(flag('timeout', '540'));
-  if (!Number.isFinite(secs) || secs < 1 || secs > 3600) die('--timeout 要是 1 到 3600 秒');
-
-  const soup = loadSoup(false);
-  const s = await connect(name, 'ear');
-  await restoreSurface(s, soup);
-
+/**
+ * 等到有待答問題、或玩家按了揭曉，或期限到。
+ *
+ * 期限內斷線就自己接回來繼續等 —— 斷線在這裡是常態（DO 休眠會關掉閒置連線），
+ * 把它當成「這一輪沒人提問」丟回去，主持人就會以為房間安靜，實際上是它沒在聽。
+ *
+ * 已經連著的話把 session 傳進來（answer 續攤用），省掉一次連線。
+ */
+async function watch(name, soup, deadline, session) {
   // 玩家在房間裡按了「揭曉湯底」。湯底只在本機，房間自己揭不了，所以這裡也要醒。
   // 揭完之後 want 仍然是 true（它單向鎖定），所以條件要看湯底寫進去了沒有 ——
   // 只看 want 的話，下一次 wait 會立刻返回，主持迴圈就變成空轉。
   const owed = d => d.want === true && soup && soup.bottom && d.bottom !== soup.bottom;
+  let s = session, revealed = false, lost = '';
 
-  const pending = await new Promise(resolve => {
-    const now = pendingOf(s.doc);
-    if (now.length || owed(s.doc)) return resolve(now);
+  for (;;) {
+    if (!s) {
+      try {
+        s = await connect(name, 'ear');
+        await restoreSurface(s, soup);
+        lost = '';
+      } catch (e) {
+        lost = e.message;
+        if (Date.now() >= deadline) return { s: null, pending: [], revealed, lost };
+        await nap(2000);
+        continue;
+      }
+    }
 
-    const timer = setTimeout(() => resolve([]), secs * 1000);
-    s.on(m => {
-      if (m.t === 'closed') { clearTimeout(timer); return resolve([]); }
-      const p = pendingOf(s.doc);
-      if (p.length || owed(s.doc)) { clearTimeout(timer); resolve(p); }
-    });
-  });
+    const left = deadline - Date.now();
+    const out = left <= 0
+      ? { pending: pendingOf(s.doc) }
+      : await new Promise(resolve => {
+        const now = pendingOf(s.doc);
+        if (now.length || owed(s.doc)) return resolve({ pending: now });
 
-  // 授權來自玩家按下去的那一下，所以這裡直接揭，不再回頭問主持人 ——
-  // 中間多一次判斷，玩家就要多等一輪 wait 才看得到湯底。
-  let revealed = false;
-  if (owed(s.doc)) {
-    await commit(s, [{ p: 'bottom', v: soup.bottom }], d => d.bottom === soup.bottom);
-    revealed = true;
+        const timer = setTimeout(() => resolve({ pending: [] }), left);
+        s.on(m => {
+          if (m.t === 'closed') { clearTimeout(timer); return resolve({ closed: true }); }
+          const p = pendingOf(s.doc);
+          if (p.length || owed(s.doc)) { clearTimeout(timer); resolve({ pending: p }); }
+        });
+      });
+
+    if (out.closed) {
+      s = null;
+      if (Date.now() >= deadline) return { s: null, pending: [], revealed, lost: '連線中斷' };
+      continue;                                   // 期限還沒到，接回來繼續等
+    }
+
+    // 授權來自玩家按下去的那一下，所以這裡直接揭，不再回頭問主持人 ——
+    // 中間多一次判斷，玩家就要多等一輪 wait 才看得到湯底。
+    if (owed(s.doc)) {
+      await commit(s, [{ p: 'bottom', v: soup.bottom }], d => d.bottom === soup.bottom);
+      revealed = true;
+    }
+    return { s, pending: out.pending, revealed, lost };
   }
-  s.close();
+}
 
-  // 給 Claude Code 讀的：整局的來龍去脈都在這裡，但湯底不在（湯底在本機檔案）。
+/** 給 Claude Code 讀的報告：整局的來龍去脈都在這裡，但湯底不在（湯底在本機檔案）。 */
+function report(name, r) {
+  if (!r.s) die('連不上 ' + name + '：' + (r.lost || '不明原因'));
+  const d = r.s.doc;
   console.log(JSON.stringify({
     room: name,
-    rev: s.doc.rev,
-    lives: s.doc.lives,
-    ask: s.doc.ask || '',           // 揭底提議：''／near／full
-    want: s.doc.want === true,      // 玩家按了揭曉
-    revealed,                       // 這一輪剛把湯底寫進房間
-    surface: s.doc.surface,
-    history: s.doc.rows
-      .map((r, i) => ({ row: i + 1, q: r.q, a: r.a, n: r.n }))
-      .filter(r => r.q || r.a || r.n),
-    pending,
+    rev: d.rev,
+    lives: d.lives,
+    ask: d.ask || '',             // 揭底提議：''／near／full
+    want: d.want === true,        // 玩家按了揭曉
+    revealed: r.revealed,         // 這一輪剛把湯底寫進房間
+    surface: d.surface,
+    history: d.rows
+      .map((row, i) => ({ row: i + 1, q: row.q, a: row.a, n: row.n }))
+      .filter(row => row.q || row.a || row.n),
+    pending: r.pending,
   }, null, 2));
+}
+
+// 預設 100 秒，不是 9 分鐘：主持 subagent 的 Bash 工具預設 120 秒就會砍掉指令，
+// 卡更久只會換來一個逾時錯誤，而不是「這段時間沒人提問」。回空就再跑一次，很便宜。
+function deadlineFrom(name, fallback) {
+  const secs = Number(flag(name, fallback));
+  if (!Number.isFinite(secs) || secs < 1 || secs > 3600) die('--' + name + ' 要是 1 到 3600 秒');
+  return Date.now() + secs * 1000;
+}
+
+async function cmdWait(name) {
+  const deadline = deadlineFrom('timeout', '100');
+  const soup = loadSoup(false);
+  const r = await watch(name, soup, deadline, null);
+  if (r.s) r.s.close();
+  report(name, r);
 }
 
 async function cmdAnswer(name) {
   const soup = loadSoup();
+
+  // --then：答完不斷線，直接接著等下一批問題，一次工具呼叫做完一輪。
+  // 每題省掉一次行程啟動、一次連線、一次工具呼叫 —— 模型路徑上唯一能省的那一段。
+  const then = has('then') ? deadlineFrom('then', '100') : 0;
 
   const n = Number(rest[1]);
   if (!Number.isInteger(n) || n < 1 || n > ROWS_MAX) die('列號要是 1 到 ' + ROWS_MAX + ' 的整數');
@@ -453,7 +502,7 @@ async function cmdAnswer(name) {
   const a = String(rest[2] === undefined ? '' : rest[2]).trim().toUpperCase();
   if (!ANS.has(a)) die('回答只能是 T（是）、F（否）、I（無關），而且不可為空，收到：' + JSON.stringify(rest[2] ?? ''));
 
-  const s = await connect(name);
+  const s = await connect(name, then ? 'ear' : '');
   await restoreSurface(s, soup);
   const r = s.doc.rows[i];
 
@@ -542,7 +591,7 @@ async function cmdAnswer(name) {
   // 已經亮著 near、現在全解了，就升級成 full。伺服器只准往上升，不准退回。
   const lit = show && s.doc.ask !== level && !(s.doc.ask === 'full' && level === 'near');
   if (lit) await commit(s, [{ p: 'ask', v: level }], d => d.ask === level);
-  s.close();
+  if (!then) s.close();
 
   const score = cov.solved.length + '/' + (cov.solved.length + cov.open.length)
     + ' 格（門檻 ' + cov.need + '）';
@@ -552,6 +601,14 @@ async function cmdAnswer(name) {
     + '，房裡跳出了揭底提議（' + level + '）。' + (cov.covered ? '' : '（--covered 覆寫）'));
   else if (has('hold')) console.log('  （--hold：這一列不點亮提議）已解開 ' + score + still);
   else console.log('  已解開 ' + score + still);
+
+  // 續攤：不斷線，直接接著等下一批。印出來的 JSON 跟 wait 完全一樣，
+  // 主持人拿到之後就能直接判斷下一列，不必再跑一次 wait。
+  if (then) {
+    const r = await watch(name, soup, then, s);
+    if (r.s) r.s.close();
+    report(name, r);
+  }
 }
 
 /**
@@ -594,17 +651,20 @@ const HELP = `海龜湯 · 本機主持人 CLI
   hold <房號> --soup <檔> [--minutes 180]
                                           當房間的地板：連著不放，房間空了就補回湯麵
                                           開局時在背景起一支，整局都有客戶端在線
-  wait <房號> [--soup <檔>] [--timeout 540]
+  wait <房號> [--soup <檔>] [--timeout 100]
                                           卡住等玩家提問，出現待答問題就印出 JSON 並結束
+                                          期限內斷線會自己接回來繼續等
                                           給了 --soup 就順便補回不見的湯麵；
                                           玩家按了「揭曉湯底」也會醒，並代為揭底
   answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>]
-                                          [--hold] [--covered]
+                                          [--hold] [--covered] [--then [秒]]
                                           回答一列。T/F/I 以外一律退回
                                           給提示要同時指名要素圖的哪一格：
                                           ${SLOTS.join('／')}
                                           解開的格數到門檻就點亮揭底提議
                                           --hold 這次不點亮，--covered 這次強制點亮
+                                          --then：答完不斷線，接著等下一批（預設 100 秒），
+                                          印出跟 wait 一樣的 JSON —— 一次呼叫做完一輪
   brief  --soup <檔>                      印出湯底與要素圖（⚠ 只給主持 subagent 跑）
   reveal <房號> <房號> --soup <檔>        揭曉湯底，房號要打兩次
 

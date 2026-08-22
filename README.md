@@ -71,8 +71,8 @@ changes and the Worker still makes no LLM calls — the model runs outside the r
 ```bash
 npm run host -- init   <room> --soup soups/<room>.veil
 npm run host -- hold   <room> --soup soups/<room>.veil     # run in the background: keeps a client in the room
-npm run host -- wait   <room> --soup soups/<room>.veil     # blocks up to 9 min, prints pending questions
-npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.veil [--note "…"]
+npm run host -- wait   <room> --soup soups/<room>.veil     # blocks up to 100 s, prints pending questions
+npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.veil [--note "…"] [--then]
 npm run host -- brief  --soup soups/<room>.veil            # prints the solution; host subagent only
 npm run host -- reveal <room> <room> --soup soups/<room>.veil
 ```
@@ -239,6 +239,18 @@ where a player told they are one piece short does not. The wording for each stat
 client, so the document carries a state and nothing a compromised host could write into it. A flag
 that could go dark again would say *the question you just asked was the wrong direction*, which is
 not what this channel is for.
+
+### One call per question
+
+`answer --then` writes the answer and then keeps the same connection open waiting for the next
+batch, printing exactly what `wait` prints. A question therefore costs one tool call rather than
+two, and the player saves a process start and a fresh WebSocket handshake per answer.
+
+`wait` blocks for 100 seconds by default rather than the nine minutes it once did, because the
+agent's own shell tool kills a command at 120 seconds: blocking longer bought a timeout error
+instead of a quiet "nobody asked". Within its deadline `wait` reconnects on its own — a dropped
+socket is normal here, since the Durable Object hibernates idle connections, and reporting it as
+"nobody asked" would leave the host deaf while it believed the room was quiet.
 
 ### Telling the player whether anyone is listening
 
