@@ -628,6 +628,7 @@
   /* ── 提示視窗 ────────────────────── */
 
   let lastFocus = null;
+  let owedOffer = false;      // 被別的視窗擋掉的揭底提議，等它關掉再跳
   function ask(title, text, actions, locked) {
     lastFocus = document.activeElement;
     ctitle.textContent = title;
@@ -649,6 +650,8 @@
     if (veil.dataset.locked) return;
     veil.classList.remove('open');
     if (lastFocus) lastFocus.focus();
+    // 剛才被這個視窗擋掉的提議，現在補跳。關掉提議本身時 owedOffer 是 false，不會打轉。
+    if (owedOffer) offerReveal();
   }
   veil.addEventListener('click', e => { if (e.target === veil) close(); });
   document.addEventListener('keydown', e => {
@@ -671,7 +674,10 @@
   function offerReveal() {
     const copy = OFFER[doc.ask];
     if (!copy || doc.want) return;
-    if (veil.classList.contains('open')) return;   // 已經有別的視窗開著，不要蓋掉
+    // 已經有別的視窗開著就先不蓋掉，但要記住這一次欠著 —— 那個視窗關掉時補跳。
+    // 少了這個補跳，回答剛好在視窗開著時送達的話，那一列的提議就永遠消失了。
+    if (veil.classList.contains('open')) { owedOffer = true; return; }
+    owedOffer = false;
     ask(copy[0], copy[1], [
       { label: '揭曉湯底', run: () => { doc.want = true; queue('want', true); } },
       { label: '繼續玩' },
