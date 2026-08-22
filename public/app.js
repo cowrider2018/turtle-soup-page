@@ -446,7 +446,11 @@
   function handle(m) {
     if (m.t === 'sync') {
       // hollow＝伺服器休眠醒來、手上是空的。手上有內容就別讓空文件蓋掉，反過來餵回去。
-      if (m.hollow && hasContent(doc)) { sendSeed(); return; }
+      //
+      // 「手上」要連 backup 一起算。剛重整回來的分頁 doc 是空的，有內容的是 sessionStorage
+      // 那一份 —— 只看 doc 的話這一格會放行，空文件順勢蓋進 doc、再被 keep() 寫回
+      // sessionStorage，備份也跟著沒了。整局就是這樣在一次 F5 之後消失的。
+      if (m.hollow && (hasContent(doc) || hasContent(backup))) { sendSeed(); return; }
       doc.rev = m.doc.rev;
       doc.lives = m.doc.lives;
       doc.rows = m.doc.rows.map(r => ({ q: r.q, a: r.a, n: r.n }));
@@ -458,7 +462,7 @@
       doc.want = m.doc.want === true;
       // why = wipe：全房重設，正在打字的欄位也一併覆蓋
       render(!!m.why);
-      if (m.why) { pending.clear(); inflight.clear(); }
+      if (m.why) { pending.clear(); inflight.clear(); forget(); }
       else replay();   // 這份全量可能沒帶到我們剛送出、卻被空窗期丟掉的那幾筆
       keep();
       offerReveal();   // 中途進房、或重整回來，該問的還是要問
@@ -498,12 +502,22 @@
     if (keepTimer) return;
     keepTimer = setTimeout(() => {
       keepTimer = null;
+      // 備份只往「有內容」的方向覆蓋。剛重整回來、或伺服器還在等人補的那幾秒，手上這份
+      // 是空的 —— 拿它蓋掉備份等於把整局丟掉。真的要清空的只有 wipe，那條路走 forget()。
+      if (!hasContent(doc) && hasContent(backup)) return;
       try { sessionStorage.setItem(KEY, JSON.stringify(doc)); } catch { /* 滿了就算了 */ }
     }, 1000);
   }
 
+  // 清空是唯一該讓備份消失的事件。少了它，wipe 之後那份舊備份會擋住 keep()，
+  // 下一次房間喊 need 還會把清掉的內容餵回去。
+  function forget() {
+    backup = null;
+    try { sessionStorage.removeItem(KEY); } catch { /* ignore */ }
+  }
+
   // 只當備援，不直接畫到畫面上 —— 畫面永遠以伺服器那份為準
-  const backup = (() => {
+  let backup = (() => {
     try {
       const d = JSON.parse(sessionStorage.getItem(KEY) || 'null');
       if (!d || !Array.isArray(d.rows) || !hasContent(d)) return null;
