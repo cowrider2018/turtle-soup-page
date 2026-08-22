@@ -9,7 +9,7 @@
  *   npm run pick -- add    <草稿.json>              檢查通過就遮蔽入庫
  *   npm run pick -- reject <草稿.json> --code E_XXX --why "…"
  *   npm run pick -- list                            倉存清單（不印任何題目內容）
- *   npm run pick -- take   <房號>                   取一題未出過的寫成 soups/<房號>.veil
+ *   npm run pick -- take   <房號> [--hash h|--find 詞]  取一題未出過的寫成 soups/<房號>.veil
  *   npm run pick -- peek   <hash> <hash>            刻意看湯底，hash 要打兩次
  *   npm run pick -- stats                           淘汰理由分佈
  *
@@ -435,6 +435,27 @@ function cmdList() {
   console.log('\n（刻意不印任何題目內容。要看湯底：peek <hash> <hash>）');
 }
 
+/* 指名要哪一題。沒指名就是最舊的一題。
+ * --hash 直接點名；--find 比對湯麵 —— 湯麵本來就會進房間，拿它當鑰匙不會多洩什麼，
+ * 而且指名的人（使用者、主線）因此不必為了找題目去 peek 湯底。
+ * 兩者都只印 hash，任何情況下都不印題目內容。 */
+function pickHash(ready, want, find) {
+  if (want) {
+    if (!ready.some(([h]) => h === want)) die(want + ' 不在未出過的倉存裡（跑 list 看狀態）');
+    return want;
+  }
+  if (find) {
+    const key = norm(find);
+    const hit = ready.filter(([h]) =>
+      norm(unveil(readFileSync(join(VETTED, h + '.veil'), 'utf8')).surface).includes(key));
+    if (!hit.length) die('沒有湯麵含「' + find + '」的未出過湯');
+    if (hit.length > 1) die('有 ' + hit.length + ' 題的湯麵都含「' + find + '」：'
+      + hit.map(([h]) => h).join(' ') + '。改用 --hash 指名一題');
+    return hit[0][0];
+  }
+  return ready[0][0];
+}
+
 function cmdTake(name) {
   ensureDirs();
   if (!name) die('要指定房號');
@@ -444,7 +465,7 @@ function cmdTake(name) {
     .sort((a, b) => (a[1].at || '').localeCompare(b[1].at || ''));
   if (!ready.length) die('倉裡沒有未出過的湯了。跑 /soup-harvest 補貨。');
 
-  const [hash] = ready[0];
+  const hash = pickHash(ready, flag('hash'), flag('find'));
   const src = join(VETTED, hash + '.veil');
   if (!existsSync(src)) die('記帳說有 ' + hash + '，但檔案不見了：' + src);
 
@@ -653,7 +674,8 @@ const HELP = `海龜湯 · 湯倉 CLI
   add    <草稿.json>                通過就遮蔽入庫
   reject <草稿.json> --code E_XXX --why "…"
   list                              倉存清單（不印任何題目內容）
-  take   <房號>                     取一題未出過的寫成 soups/<房號>.veil
+  take   <房號> [--hash h]          取一題未出過的寫成 soups/<房號>.veil
+                [--find 詞]         沒指名就取最舊的；--find 比對湯麵指名一題
   peek   <hash> <hash>              刻意看湯底，hash 要打兩次
   stats                             淘汰理由分佈
   reindex                           從檔案重建記帳表（並行寫壞時用）
