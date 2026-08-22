@@ -232,11 +232,11 @@ function connect(name, role) {
           if (g) grow(doc.rows, Number(g[1]))[g[2]] = op.v;
         }
       } else if (m.t === 'need') {
-        // 不補。主持人是短命客戶端 —— 每個指令都重新連一次線，手上的列永遠可能是舊的，
-        // 拿它去補會整份蓋掉玩家剛打進去的提問（seed 是整份取代，不是合併）。
+        // 這裡不補。短命客戶端（init、wait、answer）每個指令都重新連一次線，手上的列
+        // 永遠可能是舊的，拿它去補會整份蓋掉玩家剛打進去的提問（seed 是整份取代，不是合併）。
         //
-        // 列的內容歸玩家的瀏覽器保管，它們才是全程在線的那一方。主持人只負責湯麵，
-        // 而湯麵是靠 restoreSurface 明確補的，不走 seed。
+        // 補的人是 hold：它整局掛著同一條連線，鏡像跟著房間一起走，而且排在玩家的瀏覽器
+        // 後面才出手（見 cmdHold）。這裡只把訊息轉給監聽器，由它決定。
       }
 
       for (const fn of listeners) fn(m);
@@ -283,6 +283,57 @@ async function restoreSurface(session, soup) {
   return true;
 }
 
+const SEED_GRACE = 1500;    // 讓玩家的瀏覽器先補的寬限（伺服器的 seed 窗口是 3 秒）
+const SEED_ACK = 600;       // 送出 seed 之後，等伺服器把全量 sync 廣播回來
+const HEAL_COOLDOWN = 5000; // 補救不成時別黏著房間一直重試
+const OPS_MAX = 48;         // 單筆 patch 的操作數（伺服器上限 64）
+const BYTES_MAX = 6000;     // 單筆 patch 的位元組數（伺服器上限 8192）
+
+/**
+ * 把整份鏡像用一般的 patch 寫回空房間。
+ *
+ * seed 只有在伺服器自己喊過 need 的那幾秒收得下（見 worker/room.js 的 isHollow）。
+ * 房間整顆消失、被下一個連線重新開出來的時候它不算 hollow —— 那時候 seed 會被靜靜丟掉，
+ * 唯一寫得進去的是 patch。所以兩條路都要有，這是 patch 那一條。
+ *
+ * 只在房間確實是空的時候呼叫，所以蓋不到任何人。
+ */
+async function restoreMirror(session, mirror) {
+  const ops = [{ p: 'lives', v: mirror.lives }, { p: 'surface', v: mirror.surface }];
+  if (mirror.bottom) ops.push({ p: 'bottom', v: mirror.bottom });
+  if (mirror.ask) ops.push({ p: 'ask', v: mirror.ask });
+  if (mirror.want) ops.push({ p: 'want', v: true });
+  mirror.rows.forEach((r, i) => {
+    for (const k of ['q', 'a', 'n']) if (r[k]) ops.push({ p: 'rows.' + i + '.' + k, v: r[k] });
+  });
+
+  for (const chunk of chunks(ops)) {
+    const last = chunk[chunk.length - 1];
+    await commit(session, chunk, d => applied(d, last));
+  }
+}
+
+/** 一筆 patch 同時受操作數與訊息位元組數限制，兩個都要顧（LIM.ops / LIM.msgBytes）。 */
+function chunks(ops) {
+  const out = [];
+  let cur = [], bytes = 0;
+  for (const op of ops) {
+    const n = Buffer.byteLength(JSON.stringify(op), 'utf8') + 1;
+    if (cur.length && (cur.length >= OPS_MAX || bytes + n > BYTES_MAX)) { out.push(cur); cur = []; bytes = 0; }
+    cur.push(op); bytes += n;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+/** 這一筆操作在鏡像裡生效了沒 —— commit 用它判斷伺服器是不是真的收下了。 */
+function applied(doc, op) {
+  const bits = op.p.split('.');
+  if (bits.length !== 3 || bits[0] !== 'rows') return doc[op.p] === op.v;
+  const row = doc.rows[Number(bits[1])];
+  return !!row && row[bits[2]] === op.v;
+}
+
 /**
  * 房間的地板。
  *
@@ -290,10 +341,14 @@ async function restoreSurface(session, soup) {
  * —— init、wait、answer 各連一次就走 —— 所以從出題到玩家開頁面之間、以及每答完一列
  * 到下一次 wait 之間，房間都是沒有地板的：那幾秒到幾分鐘裡房間掉了，玩家開進去就是空房。
  *
- * 這支指令就是那塊地板：連上就不放，斷了自己接回來，發現湯麵不見了就補回去。
+ * 這支指令就是那塊地板：連上就不放，斷了自己接回來，發現房間空了就補回去。
  * 開局時在背景起一支，整局都有人在線。
  *
- * 它一樣不補列 —— 列歸玩家的瀏覽器保管（見 connect 裡 need 那段的說明）。
+ * 它也保管整局的鏡像。列原本只存在玩家的瀏覽器裡，那一份撐不過一次 F5 —— 房間醒來喊
+ * need 的時候剛重整完的分頁手上是空的，沒有人補得出來，整局就沒了。地板是全程在線、
+ * 不會重整的那一方，所以由它兜底，但排在玩家後面：先等 SEED_GRACE 讓瀏覽器補（它手上
+ * 那份比較新），過了寬限期房間還是空的才餵鏡像。伺服器只在自己確實空著的時候收 seed，
+ * 所以晚到的那一份不會蓋掉任何人。
  */
 async function cmdHold(name) {
   const soup = loadSoup();
@@ -303,32 +358,75 @@ async function cmdHold(name) {
 
   console.log('· 守著 ' + name + '（' + minutes + ' 分鐘，Ctrl-C 可以提早收）');
   let laps = 0, fixes = 0;
+  let mirror = null;          // 跨連線保留：重連拿到的第一份 sync 本身就可能是空的
+
+  const snap = d => JSON.parse(JSON.stringify(d));
+  const rowsOf = d => d.rows.filter(r => r.q || r.a || r.n).length;
 
   while (Date.now() < until) {
     let s;
     try { s = await connect(name, 'floor'); }
     catch (e) { console.error('· 連不上，5 秒後重試：' + e.message); await nap(5000); continue; }
     laps++;
-    if (await restoreSurface(s, soup)) fixes++;
 
-    // 掛著，直到斷線或時間到。房間醒來空的時候會再補一次湯麵 ——
-    // 補救動作放在監聽器裡，用 busy 擋住重入，免得同一次空窗補好幾遍。
-    let busy = false;
-    await new Promise(resolve => {
+    // 房間是不是空的，這裡自己記。收到 need 之後 s.doc 還留著上一次的內容，
+    // 光看鏡像分不出「房間好好的」跟「房間掉了，只是還沒有人把空的那份送來」。
+    let empty = !hasContent(s.doc);
+    let busy = false, healedAt = 0;
+    if (!empty) mirror = snap(s.doc);
+
+    const heal = async () => {
+      await nap(SEED_GRACE);
+      if (!empty) return;                       // 這段時間裡有人補好了
+      if (mirror && hasContent(mirror)) {
+        s.send({ t: 'seed', doc: mirror });
+        await nap(SEED_ACK);
+        if (empty) await restoreMirror(s, mirror);       // 不是 hollow，seed 被丟掉了
+        if (!empty) {
+          console.error('· 房間的記憶體掉了，已把整份紀錄補回（' + rowsOf(mirror) + ' 列）');
+          fixes++;
+          return;
+        }
+      }
+      if (await restoreSurface(s, soup)) fixes++;
+    };
+
+    const tend = async () => {
+      if (busy || !empty || Date.now() - healedAt < HEAL_COOLDOWN) return;
+      busy = true;
+      try { await heal(); }
+      catch (e) { console.error('· 補救失敗：' + e.message); }
+      healedAt = Date.now();
+      busy = false;
+    };
+
+    // 掛著，直到斷線或時間到。監聽器要先掛上再補救：反過來的話，補救期間沒有人更新
+    // empty，heal 就看不出伺服器已經收下了，會白做一次。
+    const done = new Promise(resolve => {
       const timer = setTimeout(resolve, Math.max(0, until - Date.now()));
-      s.on(async m => {
+      s.on(m => {
         if (m.t === 'closed') { clearTimeout(timer); return resolve(); }
-        if (busy || s.doc.surface) return;
-        busy = true;
-        try { if (await restoreSurface(s, soup)) fixes++; }
-        catch (e) { console.error('· 補湯麵失敗：' + e.message); }
-        busy = false;
+
+        // 只有真的帶了房間狀態的訊息才動 empty。here 與 err 不帶 —— 拿鏡像去判斷的話，
+        // 房間空了以後隨便一則 here 就會把 empty 抹掉，補救永遠不會發生。
+        if (m.t === 'need') empty = true;                        // 伺服器自己說它空了
+        else if (m.t === 'sync') {
+          if (m.why === 'wipe') mirror = null;                   // 清空之後別再補回來
+          empty = !hasContent(s.doc);
+          if (!empty) mirror = snap(s.doc);
+        } else if (m.t === 'patch' && hasContent(s.doc)) {
+          empty = false;
+          mirror = snap(s.doc);
+        }
+        tend();
       });
     });
+    tend();
+    await done;
     s.close();
   }
 
-  console.log('✓ 不守了：' + name + '（連線 ' + laps + ' 次，補回湯麵 ' + fixes + ' 次）');
+  console.log('✓ 不守了：' + name + '（連線 ' + laps + ' 次，補回 ' + fixes + ' 次）');
 }
 
 async function cmdInit(name) {
