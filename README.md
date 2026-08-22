@@ -80,6 +80,18 @@ npm run host -- reveal <room> <room> --soup soups/<room>.veil
 A soup file is either a pantry `.veil` file or a hand-written plain JSON
 `{ "surface": …, "bottom": …, "lives": 6 }`. Both are read the same way.
 
+**On PowerShell, call `node` directly instead.** `npm run host -- … --soup x` arrives at the script
+with every `--flag` stripped and only the values left, so the command fails with a confusing
+"missing --soup". Skip the wrapper:
+
+```powershell
+node tools/host.mjs hold myroom --soup soups/myroom.veil --host https://<your-domain>
+```
+
+Ctrl-C then reaches the process that is actually doing the work: stopping the npm wrapper leaves
+the real one running, which is how several orphaned `hold` processes once accumulated unnoticed.
+`npm run host --% -- …` also works if the wrapper is wanted.
+
 ### The pantry
 
 `tools/soup-pick.mjs` keeps a local stock of puzzles so that posting one costs no model calls at
