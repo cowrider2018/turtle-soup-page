@@ -26,7 +26,9 @@
  *      wait 只有在玩家於房間裡按下「揭曉湯底」（want）之後才會代為揭底。
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { unveil, isVeiled } from './veil.mjs';
 import { leaks, NGRAM, bare } from './leak.mjs';
 import { offVocab } from './vocab.mjs';
@@ -87,12 +89,33 @@ function room(v, what = '房號') {
 
 /* ── 湯底檔 ───────────────────────── */
 
-function loadSoup(required = true) {
-  const path = flag('soup');
+// 湯倉寫出來的檔案永遠落在這裡，所以房號本身就推得出路徑。基準是這支程式的位置，
+// 不是 cwd —— 從別的目錄跑起來也要指得到同一份。
+const SOUPS = join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'soups');
+
+/**
+ * 沒給 --soup 就用 soups/<房號>.veil，沒有那一份就退而找同名的明文 .json。
+ * 房號的字元集不含 . / \（見 room()），拼進路徑不會跑出 soups/ 之外。
+ */
+function soupPath(name) {
+  const given = flag('soup');
+  if (given) return given;
+  if (!name) return '';
+  for (const ext of ['.veil', '.json']) {
+    const guess = join(SOUPS, name + ext);
+    if (existsSync(guess)) return guess;
+  }
+  return join(SOUPS, name + '.veil');      // 都沒有也回這個，錯誤訊息才指得出來
+}
+
+function loadSoup(name, required = true) {
+  const path = soupPath(name);
   if (!path) {
     if (!required) return null;
     die('要用 --soup 指定湯底檔');
   }
+  // 推出來的預設路徑不存在，對選填的指令來說只是「這一輪沒有湯底可用」，不是錯誤。
+  if (!required && !flag('soup') && !existsSync(path)) return null;
   let raw;
   try { raw = readFileSync(path, 'utf8'); }
   catch (e) { die('讀不到湯底檔 ' + path + '：' + e.message); }
@@ -351,7 +374,7 @@ function applied(doc, op) {
  * 所以晚到的那一份不會蓋掉任何人。
  */
 async function cmdHold(name) {
-  const soup = loadSoup();
+  const soup = loadSoup(name);
   const minutes = Number(flag('minutes', '180'));
   if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) die('--minutes 要是 1 到 1440');
   const until = Date.now() + minutes * 60000;
@@ -430,7 +453,7 @@ async function cmdHold(name) {
 }
 
 async function cmdInit(name) {
-  const soup = loadSoup();
+  const soup = loadSoup(name);
   const s = await connect(name);
 
   if (hasContent(s.doc)) {
@@ -579,14 +602,14 @@ function deadlineFrom(name, fallback) {
 
 async function cmdWait(name) {
   const deadline = deadlineFrom('timeout', '100');
-  const soup = loadSoup(false);
+  const soup = loadSoup(name, false);
   const r = await watch(name, soup, deadline, null);
   if (r.s) r.s.close();
   report(name, r);
 }
 
 async function cmdAnswer(name) {
-  const soup = loadSoup();
+  const soup = loadSoup(name);
 
   // --then：答完不斷線，直接接著等下一批問題，一次工具呼叫做完一輪。
   // 每題省掉一次行程啟動、一次連線、一次工具呼叫 —— 模型路徑上唯一能省的那一段。
@@ -715,8 +738,8 @@ async function cmdAnswer(name) {
  * ⚠ 這是整套工具裡唯一會印出湯底的主持指令，只給主持用的 subagent 跑。
  * 主對話不得執行 —— 使用者自己也是玩家，湯底一旦進了主對話就在他眼前。
  */
-function cmdBrief() {
-  const soup = loadSoup();
+function cmdBrief(name) {
+  const soup = loadSoup(name);
   console.log(JSON.stringify({
     warning: '本段含湯底，不得複述、摘要或暗示給使用者',
     bottom: soup.bottom,
@@ -731,7 +754,7 @@ async function cmdReveal(name) {
   const second = room(rest[1], '第二次的房號');
   if (name !== second) die('兩次房號不一致，為了避免在別間房揭底，這裡不接受');
 
-  const soup = loadSoup();
+  const soup = loadSoup(name);
   const s = await connect(name);
 
   await commit(s, [{ p: 'bottom', v: soup.bottom }], d => d.bottom === soup.bottom);
@@ -745,16 +768,13 @@ async function cmdReveal(name) {
 
 const HELP = `海龜湯 · 本機主持人 CLI
 
-  init <房號> --soup <檔>                 出題：把湯麵與生命數寫進房間，湯底留在本機
-  hold <房號> --soup <檔> [--minutes 180]
-                                          當房間的地板：連著不放，房間空了就補回湯麵
-                                          開局時在背景起一支，整局都有客戶端在線
-  wait <房號> [--soup <檔>] [--timeout 100]
-                                          卡住等玩家提問，出現待答問題就印出 JSON 並結束
-                                          期限內斷線會自己接回來繼續等
-                                          給了 --soup 就順便補回不見的湯麵；
+  init <房號>                             出題：把湯麵與生命數寫進房間，湯底留在本機
+  hold <房號> [--minutes 180]             當房間的地板：連著不放，房間空了就把整份紀錄
+                                          補回去。開局時在背景起一支，整局都有客戶端在線
+  wait <房號> [--timeout 100]             卡住等玩家提問，出現待答問題就印出 JSON 並結束
+                                          期限內斷線會自己接回來繼續等；順便補回不見的湯麵
                                           玩家按了「揭曉湯底」也會醒，並代為揭底
-  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>]
+  answer <房號> <列號> <T|F|I> [--note "…" --slot <格名>]
                                           [--hold] [--covered] [--then [秒]]
                                           回答一列。T/F/I 以外一律退回
                                           給提示要同時指名要素圖的哪一格：
@@ -763,9 +783,10 @@ const HELP = `海龜湯 · 本機主持人 CLI
                                           --hold 這次不點亮，--covered 這次強制點亮
                                           --then：答完不斷線，接著等下一批（預設 100 秒），
                                           印出跟 wait 一樣的 JSON —— 一次呼叫做完一輪
-  brief  --soup <檔>                      印出湯底與要素圖（⚠ 只給主持 subagent 跑）
-  reveal <房號> <房號> --soup <檔>        揭曉湯底，房號要打兩次
+  brief  <房號>                           印出湯底與要素圖（⚠ 只給主持 subagent 跑）
+  reveal <房號> <房號>                    揭曉湯底，房號要打兩次
 
+  --soup <檔>     湯底檔。不給就用 soups/<房號>.veil，沒有那一份就找同名的 .json
   --host <網址>   目標站台，預設 ${BASE}
                   （也吃環境變數 SOUP_HOST）
 
@@ -779,7 +800,7 @@ try {
     case 'hold':   await cmdHold(room(rest[0])); break;
     case 'wait':   await cmdWait(room(rest[0])); break;
     case 'answer': await cmdAnswer(room(rest[0])); break;
-    case 'brief':  cmdBrief(); break;
+    case 'brief':  cmdBrief(rest[0] === undefined ? '' : room(rest[0])); break;
     case 'reveal': await cmdReveal(room(rest[0])); break;
     default:
       console.log(HELP);

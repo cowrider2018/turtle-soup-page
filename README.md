@@ -69,23 +69,28 @@ answers each question with `T` / `F` / `I`. The judgement is made by a local Cla
 changes and the Worker still makes no LLM calls — the model runs outside the request path.
 
 ```bash
-npm run host -- init   <room> --soup soups/<room>.veil
-npm run host -- hold   <room> --soup soups/<room>.veil     # run in the background: keeps a client in the room
-npm run host -- wait   <room> --soup soups/<room>.veil     # blocks up to 100 s, prints pending questions
-npm run host -- answer <room> <row> <T|F|I> --soup soups/<room>.veil [--note "…"] [--then]
-npm run host -- brief  --soup soups/<room>.veil            # prints the solution; host subagent only
-npm run host -- reveal <room> <room> --soup soups/<room>.veil
+npm run host -- init   <room>
+npm run host -- hold   <room>                    # run in the background: keeps a client in the room
+npm run host -- wait   <room>                    # blocks up to 100 s, prints pending questions
+npm run host -- answer <room> <row> <T|F|I> [--note "…"] [--then]
+npm run host -- brief  <room>                    # prints the solution; host subagent only
+npm run host -- reveal <room> <room>
 ```
 
 A soup file is either a pantry `.veil` file or a hand-written plain JSON
 `{ "surface": …, "bottom": …, "lives": 6 }`. Both are read the same way.
+
+The file is not named on the command line. `--soup <path>` still overrides, but with no flag the
+room name decides it: `soups/<room>.veil`, falling back to `soups/<room>.json`. That is where
+`pick take` writes, so the convention already held — the path was simply the room name typed a
+second time in every call. The path resolves against the repository, not the working directory.
 
 **On PowerShell, call `node` directly instead.** `npm run host -- … --soup x` arrives at the script
 with every `--flag` stripped and only the values left, so the command fails with a confusing
 "missing --soup". Skip the wrapper:
 
 ```powershell
-node tools/host.mjs hold myroom --soup soups/myroom.veil --host https://<your-domain>
+node tools/host.mjs hold myroom --host https://<your-domain>
 ```
 
 Ctrl-C then reaches the process that is actually doing the work: stopping the npm wrapper leaves
@@ -188,7 +193,7 @@ Every subcommand takes `--host <origin>`, which decides where the bot connects. 
 developing locally. Point it at the deployed site to host a real game:
 
 ```bash
-npm run host -- init myroom --soup soups/myroom.json --host https://<your-domain>
+npm run host -- init myroom --host https://<your-domain>
 ```
 
 `SOUP_HOST` sets the same thing for a whole shell, which is the practical way to run a session
@@ -198,7 +203,7 @@ without repeating the flag on every call. `--host` wins when both are present.
 export SOUP_HOST=https://<your-domain>       # bash
 $env:SOUP_HOST = 'https://<your-domain>'     # PowerShell
 
-npm run host -- wait myroom --soup soups/myroom.json
+npm run host -- wait myroom
 ```
 
 The scheme selects the transport: `https:` connects over `wss:`, anything else over `ws:`. The
@@ -220,8 +225,8 @@ leak the solution:
 | Free-text note used as the leak channel | A note is accepted only on a row where the player asked for a hint, and is rejected if it shares a 6-character run with the local solution |
 | Injection triggering the reveal | A reveal has two lawful starts, and the model is neither: the operator running `reveal` with the room name twice, or a player pressing the reveal button in the room. The host CLI has no command that writes `want`, so the model cannot press that button on the player's behalf |
 
-Because the document is memory-only, a room that empties out loses the puzzle. Passing `--soup` to
-`wait` and `answer` restores `surface` whenever the room comes back without it.
+Because the document is memory-only, a room that empties out loses the puzzle. `wait` and `answer`
+restore `surface` whenever the room comes back without it.
 
 That repair only runs when the host next connects, and the host is a short-lived client: `init`,
 `wait` and `answer` each connect, write and leave. Between posting the puzzle and the player

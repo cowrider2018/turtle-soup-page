@@ -41,10 +41,13 @@ npm run pick -- take <房號>
 { "surface": "湯麵", "bottom": "湯底", "lives": 6 }
 ```
 
+湯底檔不必在指令上指名。所有指令都從房號推出 `soups/<房號>.veil`，沒有那一份就找同名的
+`.json`。要用別的路徑才加 `--soup <檔>`。
+
 2. 出題：
 
 ```bash
-npm run host -- init <房號> --soup soups/<房號>.veil
+npm run host -- init <房號>
 ```
 
 房間已經有內容時 `init` 會拒絕，這是防止蓋掉別人正在玩的一局。
@@ -53,7 +56,7 @@ npm run host -- init <房號> --soup soups/<房號>.veil
 3. **馬上在背景起一支地板**，然後才把網址給玩家：
 
 ```bash
-npm run host -- hold <房號> --soup soups/<房號>.veil    # 背景跑
+npm run host -- hold <房號>    # 背景跑
 ```
 
 房間的文件只活在記憶體裡，**沒有客戶端在線就會蒸發**。而主持人是短命客戶端 ——
@@ -79,13 +82,13 @@ npm run host -- hold <房號> --soup soups/<房號>.veil    # 背景跑
 開局後先在 subagent 裡讀一次簡報，把湯底與要素圖記住：
 
 ```bash
-npm run host -- brief --soup soups/<房號>.veil
+npm run host -- brief <房號>
 ```
 
 然後等第一批問題：
 
 ```bash
-npm run host -- wait <房號> --soup soups/<房號>.veil
+npm run host -- wait <房號>
 ```
 
 這個指令會卡住最多 100 秒，一有待答問題就印出 JSON 並結束。`pending` 是空的代表這段
@@ -99,7 +102,7 @@ npm run host -- wait <房號> --soup soups/<房號>.veil
 拿到 `pending` 之後，對每一列判斷答案並回答。**一律加 `--then`**：
 
 ```bash
-npm run host -- answer <房號> <列號> <T|F|I> --soup soups/<房號>.veil --then
+npm run host -- answer <房號> <列號> <T|F|I> --then
 ```
 
 `--then` 表示答完不斷線、直接接著等下一批，印出來的 JSON 跟 `wait` 一模一樣。
@@ -144,8 +147,8 @@ npm run host -- answer <房號> <列號> <T|F|I> --soup soups/<房號>.veil --th
 兩個覆寫旗標，都只影響當下這一列：
 
 ```bash
-npm run host -- answer <房號> <列號> <T|F|I> --soup soups/<房號>.veil --hold
-npm run host -- answer <房號> <列號> <T|F|I> --soup soups/<房號>.veil --covered
+npm run host -- answer <房號> <列號> <T|F|I> --hold
+npm run host -- answer <房號> <列號> <T|F|I> --covered
 ```
 
 - **`--hold`** 往下壓：機械判定到門檻了，但玩家顯然是碰巧問中、根本沒搞懂
@@ -160,7 +163,7 @@ npm run host -- answer <房號> <列號> <T|F|I> --soup soups/<房號>.veil --co
 給提示一定要同時用 `--slot` 指名是要素圖的哪一格：
 
 ```bash
-npm run host -- answer <房號> <列號> <T|F|I> --soup soups/<房號>.veil \
+npm run host -- answer <房號> <列號> <T|F|I> \
   --slot 方法 --note "想想死法"
 ```
 
