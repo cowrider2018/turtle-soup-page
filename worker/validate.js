@@ -29,7 +29,7 @@ const enc = new TextEncoder();
 const chars = s => [...s].length;
 
 export function newDoc() {
-  return { rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: false, want: false, updatedAt: Date.now() };
+  return { rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: '', want: false, updatedAt: Date.now() };
 }
 
 function text(v, max, singleLine) {
@@ -51,10 +51,16 @@ function field(path, v) {
   if (path === 'n') return text(v, LIM.n, true);
   if (path === 'a') return (v === '' || v === 'T' || v === 'F' || v === 'I') ? v : null;
 
-  // 揭底提議（ask，主持人寫）與揭底請求（want，玩家寫）都只收 true。
-  // 收不到 false 就是單向鎖定：提議一旦亮起就熄不掉。這是刻意的 ——
-  // 「亮了又熄」會透露剛才那一題問錯了方向，而這個通道只該帶一個 bit。
-  if (path === 'ask' || path === 'want') return v === true ? true : null;
+  // 揭底提議（ask，主持人寫）只收兩個字面值：near＝只差一格，full＝全部解開。
+  // 前端照這兩個值挑寫死的文案，所以這個欄位帶得動的東西就只有這兩種狀態，
+  // 主持人寫不進任何自由文字。
+  //
+  // 收不到空字串，所以提議一旦亮起就熄不掉。這是刻意的 ——「亮了又熄」會透露
+  // 剛才那一題問錯了方向，而那是這個通道不該帶的訊息。
+  if (path === 'ask') return (v === 'near' || v === 'full') ? v : null;
+
+  // 揭底請求（want，玩家寫）同理，只收 true。
+  if (path === 'want') return v === true ? true : null;
 
   return null;
 }
@@ -79,7 +85,7 @@ export function applyPatch(prev, ops) {
     rows: prev.rows.map(r => ({ q: r.q, a: r.a, n: r.n })),
     surface: prev.surface,
     bottom: prev.bottom,
-    ask: prev.ask === true,
+    ask: prev.ask === 'near' || prev.ask === 'full' ? prev.ask : '',
     want: prev.want === true,
     updatedAt: prev.updatedAt,
   };
@@ -93,6 +99,9 @@ export function applyPatch(prev, ops) {
     if (m[1] === undefined) {
       const v = field(op.p, op.v);
       if (v === null) return { err: 'bad_value:' + op.p };
+      // 提議只准往上升級。玩家解開的格子只增不減，所以退回 near 只可能是寫錯，
+      // 而它在畫面上的意思是「你其實還差一格」—— 那會把已經給出的答覆收回去。
+      if (op.p === 'ask' && doc.ask === 'full' && v === 'near') return { err: 'bad_value:ask' };
       doc[op.p] = v;
       clean.push({ p: op.p, v });
     } else {
@@ -115,7 +124,7 @@ export function applyPatch(prev, ops) {
 
 /** 清空：保留生命數，其餘歸零。 */
 export function wipeDoc(prev) {
-  return { rev: prev.rev + 1, lives: prev.lives, rows: [], surface: '', bottom: '', ask: false, want: false, updatedAt: Date.now() };
+  return { rev: prev.rev + 1, lives: prev.lives, rows: [], surface: '', bottom: '', ask: '', want: false, updatedAt: Date.now() };
 }
 
 /** 這份文件裡有東西嗎？用來判斷該不該拿客戶端那份來補。 */
@@ -150,7 +159,8 @@ export function sanitizeDoc(raw) {
   const rev = Number.isInteger(raw.rev) && raw.rev >= 0 && raw.rev < 1e9 ? raw.rev : 0;
   // 補文件只發生在伺服器手上是空的時候，所以這裡照收客戶端的旗標 ——
   // 沒有舊值會被它蓋掉，單向鎖定不受影響。
-  const doc = { rev, lives, rows, surface, bottom, ask: raw.ask === true, want: raw.want === true, updatedAt: Date.now() };
+  const ask = raw.ask === 'near' || raw.ask === 'full' ? raw.ask : '';
+  const doc = { rev, lives, rows, surface, bottom, ask, want: raw.want === true, updatedAt: Date.now() };
   if (enc.encode(JSON.stringify(doc)).length > LIM.docBytes) return null;
   return doc;
 }

@@ -41,7 +41,7 @@ function flag(name, fallback) {
   if (v === undefined || v.startsWith('--')) die('--' + name + ' 後面要接一個值');
   return v;
 }
-const BOOL = new Set(['hold']);                        // 這些旗標不吃值
+const BOOL = new Set(['hold', 'covered']);             // 這些旗標不吃值
 const has = name => argv.includes('--' + name);
 const positional = (() => {
   const out = [];
@@ -143,7 +143,7 @@ function endpoints(name) {
   return { url: ws.href, origin: u.origin };
 }
 
-const EMPTY = () => ({ rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: false, want: false });
+const EMPTY = () => ({ rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: '', want: false });
 
 function grow(rows, i) {
   while (rows.length <= i) rows.push({ q: '', a: '', n: '' });
@@ -201,7 +201,8 @@ function connect(name) {
       if (m.t === 'sync') {
         Object.assign(doc, {
           rev: m.doc.rev, lives: m.doc.lives, surface: m.doc.surface, bottom: m.doc.bottom,
-          ask: m.doc.ask === true, want: m.doc.want === true,
+          ask: m.doc.ask === 'near' || m.doc.ask === 'full' ? m.doc.ask : '',
+          want: m.doc.want === true,
           rows: (m.doc.rows || []).map(r => ({ q: r.q || '', a: r.a || '', n: r.n || '' })),
         });
         // hollow＝房間剛醒來、手上是空的，正在跟其他人要一份回來。
@@ -294,14 +295,20 @@ async function cmdInit(name) {
   console.log('  湯底留在本機，沒有寫進房間。');
 }
 
-/** 有問題但還沒答的列。 */
 /**
- * 要素圖裡「非空」的格是不是都已經解開了？
+ * 玩家離謎底夠近了嗎？
  *
  * 解開的定義跟提示的掃描規則同一套：該格的觸及詞出現在**拿到 T** 的提問裡。
  * 湯麵就已經揭露的格算送分 —— 玩家本來就知道，不該擋著整張圖。
  *
- * 判定放在程式裡而不是模型裡，是為了不飄：同一局裡「線索夠不夠」每答一列重算一次，
+ * 門檻是「非空格數減一」，不是全解。要求全解會卡死：觸及詞是湯底那一側的詞，
+ * 玩家問的是問題那一側的詞（湯底寫「救命」，玩家打「求救」），總有一格永遠對不上，
+ * 於是提議永遠不亮。放過一格，最窄的那一格就不再是整局的死結。
+ *
+ * 下限是 2，因為 n-1 在格子很少的時候太鬆 —— 只有兩格非空時解開一格就跳窗，
+ * 等於開局沒多久就問玩家要不要看答案。
+ *
+ * 判定放在程式裡而不是模型裡，是為了不飄：同一局裡「夠不夠近」每答一列重算一次，
  * 交給模型自由心證的話，第 12 列說夠了、第 13 列又說不夠。
  */
 function coverage(doc, elements) {
@@ -316,9 +323,11 @@ function coverage(doc, elements) {
       .map(w => bare(String(w || ''))).filter(Boolean);
     (words.length && yes.some(q => words.some(w => q.includes(w))) ? solved : open).push(slot);
   }
-  return { covered: solved.length > 0 && open.length === 0, solved, open };
+  const need = Math.max(2, solved.length + open.length - 1);
+  return { covered: solved.length >= need, solved, open, need };
 }
 
+/** 有問題但還沒答的列。 */
 function pendingOf(doc) {
   const out = [];
   for (let i = 0; i < doc.rows.length && i < doc.lives; i++) {
@@ -367,7 +376,7 @@ async function cmdWait(name) {
     room: name,
     rev: s.doc.rev,
     lives: s.doc.lives,
-    ask: s.doc.ask === true,        // 揭底提議已經亮起
+    ask: s.doc.ask || '',           // 揭底提議：''／near／full
     want: s.doc.want === true,      // 玩家按了揭曉
     revealed,                       // 這一輪剛把湯底寫進房間
     surface: s.doc.surface,
@@ -465,20 +474,29 @@ async function cmdAnswer(name) {
 
   await commit(s, ops, d => d.rows[i] && d.rows[i].a === a);
 
-  // 答完這一列，重算一次覆蓋。整張要素圖都解開了就把揭底提議點亮，
-  // 房間會跳出「你已經猜出夠多線索，要揭曉湯底嗎？」——按不按是玩家的事。
+  // 答完這一列，重算一次距離。夠近了就把揭底提議點亮，房間會跳出
+  // 「你已經非常接近謎底，要現在揭露湯底嗎？」——按不按是玩家的事。
+  //
+  // --covered 是往上覆寫：機械判定還沒到，但你看得出玩家其實已經懂了。
+  // 觸及詞窄到玩家問不出來的格不只一個時，這是唯一的出口。
   const cov = coverage(s.doc, soup.elements);
-  let lit = false;
-  if (cov.covered && s.doc.ask !== true && !has('hold')) {
-    await commit(s, [{ p: 'ask', v: true }], d => d.ask === true);
-    lit = true;
-  }
+  // near＝還差一格，full＝全部解開。兩者在房間裡是兩句不同的文案：只寫一句的話，
+  // 差一格的玩家會以為自己全中，被揭出沒想到的那一塊時只覺得被暴雷。
+  const level = cov.open.length === 0 ? 'full' : 'near';
+  const show = (cov.covered || has('covered')) && !has('hold');
+  // 已經亮著 near、現在全解了，就升級成 full。伺服器只准往上升，不准退回。
+  const lit = show && s.doc.ask !== level && !(s.doc.ask === 'full' && level === 'near');
+  if (lit) await commit(s, [{ p: 'ask', v: level }], d => d.ask === level);
   s.close();
 
+  const score = cov.solved.length + '/' + (cov.solved.length + cov.open.length)
+    + ' 格（門檻 ' + cov.need + '）';
   console.log('✓ 第 ' + n + ' 列已回答 ' + a + (note ? '（附提示）' : ''));
-  if (lit) console.log('  要素圖已全部解開，房裡跳出了揭底提議。');
-  else if (cov.covered && has('hold')) console.log('  （--hold：機械判定已覆蓋，但你判斷玩家還沒真的懂，提議沒有點亮）');
-  else if (!cov.covered) console.log('  尚未解開：' + cov.open.join('、'));
+  const still = cov.open.length ? '，尚未解開：' + cov.open.join('、') : '';
+  if (lit) console.log('  已解開 ' + score + still
+    + '，房裡跳出了揭底提議（' + level + '）。' + (cov.covered ? '' : '（--covered 覆寫）'));
+  else if (has('hold')) console.log('  （--hold：這一列不點亮提議）已解開 ' + score + still);
+  else console.log('  已解開 ' + score + still);
 }
 
 /**
@@ -522,11 +540,13 @@ const HELP = `海龜湯 · 本機主持人 CLI
                                           卡住等玩家提問，出現待答問題就印出 JSON 並結束
                                           給了 --soup 就順便補回不見的湯麵；
                                           玩家按了「揭曉湯底」也會醒，並代為揭底
-  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>] [--hold]
+  answer <房號> <列號> <T|F|I> --soup <檔> [--note "…" --slot <格名>]
+                                          [--hold] [--covered]
                                           回答一列。T/F/I 以外一律退回
                                           給提示要同時指名要素圖的哪一格：
                                           ${SLOTS.join('／')}
-                                          要素圖全解開就點亮揭底提議；--hold 這次不點亮
+                                          解開的格數到門檻就點亮揭底提議
+                                          --hold 這次不點亮，--covered 這次強制點亮
   brief  --soup <檔>                      印出湯底與要素圖（⚠ 只給主持 subagent 跑）
   reveal <房號> <房號> --soup <檔>        揭曉湯底，房號要打兩次
 

@@ -212,16 +212,25 @@ Because the document is memory-only, a room that empties out loses the puzzle. P
 
 ### Offering the reveal
 
-Once every non-empty slot of the element map has been solved — a slot counts as solved when one of
-its reach words appears in a question that got a `T` — `answer` sets `ask` on the document and the
-room offers: *you have worked out enough, shall the solution be revealed?* Taking the offer sets
-`want`, and the next `wait` writes the solution into the room, because the solution exists only on
-the host's disk and the room cannot reveal itself.
+A slot of the element map counts as solved when one of its reach words appears in a question that
+got a `T`. Once the count reaches **one short of the number of non-empty slots** (never fewer than
+two), `answer` sets `ask` and the room offers to reveal the solution. Taking the offer sets `want`,
+and the next `wait` writes the solution into the room, because the solution exists only on the
+host's disk and the room cannot reveal itself.
 
-Both fields are booleans that accept only `true`, so the offer latches on. A flag that could go
-dark again would say *the question you just asked was the wrong direction*, which is a second bit
-this channel is not meant to carry. The wording lives in the client, so the document carries one
-bit and nothing a compromised host could write into it.
+The threshold is deliberately one short of everything. Reach words are the solution's vocabulary
+while questions are the player's — a solution that says 救命 meets a player who types 求救 — so
+some slot is usually unreachable, and demanding a clean sweep would mean the offer never appears
+at all. Two host overrides handle the rest: `--hold` withholds the offer for a round where the
+player hit a slot by luck, and `--covered` grants it when more than one slot is unreachable.
+
+`ask` accepts only the literals `near` (one slot short) and `full` (all of them), and may only be
+upgraded, never cleared or downgraded; `want` accepts only `true`. The two states exist because a
+player who thinks they solved everything and is then shown a piece they never had feels spoiled,
+where a player told they are one piece short does not. The wording for each state lives in the
+client, so the document carries a state and nothing a compromised host could write into it. A flag
+that could go dark again would say *the question you just asked was the wrong direction*, which is
+not what this channel is for.
 
 ## Development
 

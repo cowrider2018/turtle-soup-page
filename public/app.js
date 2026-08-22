@@ -7,7 +7,13 @@
   'use strict';
 
   const LIM = { livesMin: 1, livesMax: 300, rows: 300, q: 300, n: 200 };
-  const doc = { rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: false, want: false };
+  // 揭底提議的兩句文案，也是 ask 欄位僅有的兩個合法值。
+  // near＝還差一格，full＝全部解開；文案寫死在這裡，房間文件只帶鍵名。
+  const OFFER = {
+    near: ['你已經非常接近謎底', '還差一點沒問到，要現在揭露湯底嗎？'],
+    full: ['你已經猜出夠多線索', '要揭曉湯底嗎？'],
+  };
+  const doc = { rev: 0, lives: 6, rows: [], surface: '', bottom: '', ask: '', want: false };
 
   const $ = id => document.getElementById(id);
   const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'), count = $('count'),
@@ -391,7 +397,7 @@
       doc.rows = m.doc.rows.map(r => ({ q: r.q, a: r.a, n: r.n }));
       doc.surface = m.doc.surface;
       doc.bottom = m.doc.bottom;
-      doc.ask = m.doc.ask === true;
+      doc.ask = OFFER[m.doc.ask] ? m.doc.ask : '';
       doc.want = m.doc.want === true;
       // why = wipe：全房重設，正在打字的欄位也一併覆蓋
       render(!!m.why);
@@ -449,7 +455,7 @@
         rows: d.rows.map(r => ({ q: r.q || '', a: r.a || '', n: r.n || '' })),
         surface: d.surface || '',
         bottom: d.bottom || '',
-        ask: d.ask === true,
+        ask: OFFER[d.ask] ? d.ask : '',
         want: d.want === true,
       };
     } catch { return null; }
@@ -652,16 +658,21 @@
   const note = (t, x) => ask(t, x, [{ label: '知道了' }]);
   function fatal(t, x) { dead = true; if (ws) ws.close(); ask(t, x, [], true); }
 
-  /* 主持人認定線索已經夠了就會把 ask 點亮，然後每答完一列再問一次 ——
+  /* 主持人認定玩家夠近了就會把 ask 點亮，然後每答完一列再問一次 ——
      選了「繼續玩」也不會關掉它，是刻意的：想揭的時候不必去找按鈕，
      畫面上也就不必為了這件事多長出一顆常駐按鈕來。
+
+     兩句文案分開，是因為它們對玩家的意思不同：near 是「還差一格」，full 是「全解了」。
+     只寫一句的話，差一格的人會以為自己全中，被揭出沒想到的那塊時只覺得被暴雷。
+     文案寫死在這裡，房間文件只帶 near / full 兩個字面值。
 
      湯底不在伺服器上，所以這裡按下去只是把 want 寫進房間；真正把湯底寫回來的是
      主持人那一端（tools/host.mjs 的 wait 收到 want 就揭）。按下去到湯底出現會差幾秒。 */
   function offerReveal() {
-    if (!doc.ask || doc.want) return;
+    const copy = OFFER[doc.ask];
+    if (!copy || doc.want) return;
     if (veil.classList.contains('open')) return;   // 已經有別的視窗開著，不要蓋掉
-    ask('你已經猜出夠多線索', '要揭曉湯底嗎？', [
+    ask(copy[0], copy[1], [
       { label: '揭曉湯底', run: () => { doc.want = true; queue('want', true); } },
       { label: '繼續玩' },
     ]);
