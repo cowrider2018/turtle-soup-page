@@ -29,19 +29,11 @@ class_name = "Limiter"
 tag = "v1"
 new_sqlite_classes = ["Room", "Limiter"]
 
-# Used by administration: per-room locks, the site-wide freeze flag and the command queue.
-# Create the namespace once with `npm run setup:kv`, then replace REPLACE_ME with the id it
-# prints. Deployment fails until it is set, which is deliberate: without KV the administration
-# commands cannot function, and failing at deploy time is preferable to discovering in production
-# that a room cannot be locked.
-[[kv_namespaces]]
-binding = "CTRL"
-id = "REPLACE_ME"
-
-# When queued administration commands are executed: once a minute.
-# 1,440 invocations per day, roughly 1.4% of the free request allowance.
-[triggers]
-crons = ["* * * * *"]
+# The AI host (worker/judge.js). Only models that draw on the free 10,000 neurons/day are used,
+# and the account has no payment method, so running out fails closed instead of billing.
+# The binding always reaches the real service, even under `wrangler dev`.
+[ai]
+binding = "AI"
 
 [observability]
 enabled = true

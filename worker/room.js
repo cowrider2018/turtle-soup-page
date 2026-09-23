@@ -1,8 +1,16 @@
-import { LIM, newDoc, applyPatch, wipeDoc, sanitizeDoc, hasContent } from './validate.js';
+import { LIM, newDoc, applyPatch, wipeDoc, sanitizeDoc, hasContent, cleanSoup } from './validate.js';
+import { judge } from './judge.js';
 
 const BUCKET_MAX = 20;        // 每連線的操作桶容量
 const BUCKET_RATE = 5;        // 每秒回補
 const SEED_COOLDOWN = 3000;   // 兩次「求救」之間至少隔這麼久
+
+const DAY = 24 * 3600 * 1000;
+const CALLS_MAX = 200;        // 一題最多判幾次。生命可以加到 300，但額度是全站共用的
+const HOST_PER_HOUR = 3;      // 每個 IP 貼新題的次數。接續同一題不算
+const HOST_PER_DAY = 10;
+const IDLE = 7 * DAY;         // 題目放在 storage 裡，這麼久沒人在就清掉
+const STUCK = '🐢 判不出來，換個問法再問一次';
 
 /**
  * 一個房間一個 Durable Object。
@@ -12,7 +20,8 @@ const SEED_COOLDOWN = 3000;   // 兩次「求救」之間至少隔這麼久
  * 而高頻共編若每次都寫 SQLite，正常一場派對就要吃掉一大塊每日額度。
  * 代價是休眠或重啟會清空記憶體，靠客戶端 re-seed 補回來（見 askSeed / onSeed）。
  *
- * 唯一會落地的是 lock 這一個 key，一天最多被寫幾次。
+ * 唯一會落地的是交給 AI 主持的那一題（soup）：湯底不能進文件，文件人人讀得到，
+ * 而記憶體會掉，所以它只能在 storage 裡。一局只寫幾次，外加每判一題記一次次數。
  */
 export class Room {
   constructor(state, env) {
@@ -20,9 +29,13 @@ export class Room {
     this.env = env;
     this.doc = null;            // null＝這顆物件手上沒有文件
     this.buckets = new Map();   // ws -> {t, at}；休眠後重建，重建即滿桶
-    this.flags = null;          // {locked, frozen}，每個實例只讀一次
     this.seeding = 0;           // 上次向客戶端求救的時間
-    this.told = undefined;      // 上次廣播出去的主持端狀態；休眠後重來一次不影響正確性
+    this.told = undefined;      // 上次廣播出去的主持狀態；休眠後重來一次不影響正確性
+
+    // {surface, bottom, on, shown, calls}；undefined＝還沒讀，null＝這間房沒有交給 AI
+    this.soup = undefined;
+    this.judging = null;        // 判題迴圈正在跑的那個 promise
+    this.stuck = new Map();     // 列 -> 判不出來的那句提問；玩家改了問法才再試
   }
 
   /**
@@ -38,25 +51,28 @@ export class Room {
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === '/ws') {
-      return this.connect(url.searchParams.get('create') === '1', url.searchParams.get('role') || '');
+      const ip = url.searchParams.get('ip') || '';
+      return this.connect(url.searchParams.get('create') === '1', /^[0-9a-f]{32}$/.test(ip) ? ip : '');
     }
-    if (url.pathname === '/admin') return this.admin(url.searchParams);
     return new Response('not found', { status: 404 });
   }
 
   sockets() { return this.state.getWebSockets(); }
 
   // ── 連線 ────────────────────────────
-  async connect(mayCreate, role) {
+  async connect(mayCreate, ip) {
+    await this.loadSoup();
     const live = this.sockets().length;
 
     // 手上沒文件又沒人在線＝這間房不存在。不自己開，先回報給 Worker，
     // 讓它過完開房限流再回來；少了這個轉手，掃網址就等於無限開房。
+    // 交給 AI 的題目還在 storage 裡的話，房間就還在：題目本身補得回來，列補不回來。
     if (!this.doc && live === 0) {
-      if (!mayCreate) {
+      if (!mayCreate && !this.soup) {
         return new Response('no such room', { status: 404, headers: { 'X-Room-Missing': '1' } });
       }
       this.doc = newDoc();
+      this.fillSoup(this.doc);
     }
     if (live >= LIM.peers) return new Response('room full', { status: 429 });
 
@@ -68,11 +84,9 @@ export class Room {
 
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
-    // 身分要存在連線上，不能存在實例欄位裡 —— 物件休眠後醒來，實例欄位沒了，
-    // 連線還在，那時候只有 attachment 說得出誰是主持端。
-    if (role === 'floor' || role === 'ear') pair[1].serializeAttachment({ role });
+    // 限流要用的 IP 雜湊存在連線上：物件休眠後實例欄位沒了，連線還在。
+    if (ip) pair[1].serializeAttachment({ ip });
     this.sendSync(pair[1]);
-    this.tellHere();
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -90,16 +104,12 @@ export class Room {
     try { m = JSON.parse(raw); } catch { return this.err(ws, 'bad_json'); }
     if (!m || typeof m.t !== 'string') return this.err(ws, 'bad_msg');
 
+    await this.loadSoup();
+
     // 休眠醒來、記憶體是空的：先向房裡的人要一份回來
     if (!this.doc) {
       this.doc = newDoc();
       this.askSeed();
-    }
-
-    // 鎖房與全站凍結擋掉所有寫入，seed 也算寫入 —— 否則鎖了房還能整份蓋掉
-    if (m.t === 'patch' || m.t === 'wipe' || m.t === 'seed') {
-      const stop = await this.guard();
-      if (stop) return this.err(ws, stop);
     }
 
     if (m.t === 'seed') return this.onSeed(ws, m);
@@ -109,26 +119,64 @@ export class Room {
     if (m.t === 'patch' && this.isHollow()) return;
 
     switch (m.t) {
-      case 'patch':  return this.onPatch(ws, m);
-      case 'wipe':   return this.wipe();
-      case 'resync': return this.sendSync(ws);
-      default:       return this.err(ws, 'unknown');
+      case 'patch':   return this.onPatch(ws, m);
+      case 'wipe':    return this.wipe();
+      case 'resync':  return this.sendSync(ws);
+      case 'host':    return this.onHost(ws, m);
+      case 'dismiss': return this.onDismiss();
+      default:        return this.err(ws, 'unknown');
     }
   }
 
-  onPatch(ws, m) {
-    const res = applyPatch(this.doc, m.ops);
+  async onPatch(ws, m) {
+    // 題目交給 AI 之後，有些欄位只剩伺服器能寫。擋下的那幾筆退回，其餘照收 ——
+    // 整筆退回的話，同一批裡玩家剛打完的提問也會跟著消失。
+    let ops = m.ops;
+    if (Array.isArray(ops)) {
+      const kept = ops.filter(op => this.mayWrite(op));
+      if (kept.length !== ops.length) {
+        this.err(ws, 'hosted');
+        if (!kept.length) return;
+      }
+      ops = kept;
+    }
+
+    const res = applyPatch(this.doc, ops);
     if (res.err) return this.err(ws, res.err);
     this.doc = res.doc;
     // 廣播給所有人（含發送者）：rev 才能連續，發送者也才會拿到清理過的值
     this.blast({ t: 'patch', rev: res.doc.rev, ops: res.ops });
+
+    // 玩家按下「揭曉湯底」。湯底只在伺服器上，所以這裡直接揭。
+    const s = this.soup;
+    if (s && !s.shown && res.ops.some(op => op.p === 'want' && op.v === true)) return this.reveal();
+    this.kick();
+  }
+
+  /** 伺服器自己寫的修改：答案、揭底、補回湯麵。不經過玩家那一層的限制。 */
+  commit(ops) {
+    const res = applyPatch(this.doc, ops);
+    if (res.err) {
+      console.warn('[room] commit rejected', res.err);
+      return false;
+    }
+    this.doc = res.doc;
+    this.blast({ t: 'patch', rev: res.doc.rev, ops: res.ops });
+    return true;
   }
 
   /** 清空。同時取消「等人補」的狀態，否則晚到的 seed 會把剛清掉的內容救回來。 */
-  wipe() {
+  async wipe() {
     this.seeding = 0;
     this.doc = wipeDoc(this.doc || newDoc());
+    // 清空就是這一局結束：交給 AI 的題目一起丟掉，下一題重新貼
+    if (this.soup) {
+      this.soup = null;
+      this.stuck.clear();
+      await this.state.storage.deleteAll();
+    }
     this.blast(this.syncMsg('wipe'));
+    this.tellHere();
   }
 
   /**
@@ -149,37 +197,29 @@ export class Room {
     try { ws.send(JSON.stringify(this.syncMsg())); } catch { /* 已斷線 */ }
   }
 
-  /* ── 主持端在不在 ──────────────────────
+  /* ── 主持狀態 ──────────────────────
    *
-   * 這件事刻意不放進文件：文件沒有 TTL，主持行程被 kill、網路斷掉、筆電闔上，
-   * 最後寫進去的「在線」會永遠留著，玩家看著綠燈卻等不到人。從連線推導就不會說謊 ——
-   * 行程沒了連線就沒了，狀態自動歸零，也沒有任何清理邏輯要維護。
+   * ear＝AI 正在回答；away＝題目還藏在伺服器上，但 AI 被請離了；''＝沒有交給 AI。
    *
-   * ear（wait 掛著，問題一到就有人判）優先於 floor（hold 守著房間，主持人還在準備）。
+   * 刻意不放進文件：文件會被客戶端整份 seed 回來，玩家就能自己宣稱「有人在主持」。
+   * 從 soup 推導的話，狀態永遠跟伺服器實際在做的事一致。
    */
-  here(skip) {
-    let floor = false;
-    for (const ws of this.sockets()) {
-      if (ws === skip) continue;
-      let att = null;
-      try { att = ws.deserializeAttachment(); } catch { /* 沒帶身分的普通玩家 */ }
-      const role = att && att.role;
-      if (role === 'ear') return 'ear';
-      if (role === 'floor') floor = true;
-    }
-    return floor ? 'floor' : '';
+  here() {
+    const s = this.soup;
+    if (!s || s.shown) return '';
+    return s.on ? 'ear' : 'away';
   }
 
-  /** 只在真的變了才廣播。斷線那一刻 skip 掉正在關的那條，否則它會被算進在場。 */
-  tellHere(skip) {
-    const here = this.here(skip);
+  /** 只在真的變了才廣播。 */
+  tellHere() {
+    const here = this.here();
     if (here === this.told) return;
     this.told = here;
     this.blast({ t: 'here', here });
   }
 
-  webSocketClose(ws) { this.tellHere(ws); }
-  webSocketError(ws) { this.tellHere(ws); }
+  webSocketClose(ws) { this.buckets.delete(ws); }
+  webSocketError(ws) { this.buckets.delete(ws); }
 
   // ── 記憶體掉了之後的補救 ──────────────
   askSeed() {
@@ -187,6 +227,24 @@ export class Room {
     if (now - this.seeding < SEED_COOLDOWN) return;
     this.seeding = now;
     this.blast({ t: 'need' });
+    // 題目在伺服器手上，不必等人補。等窗口過了還是空的，自己把湯麵放回去。
+    if (this.soup) setTimeout(() => this.heal(), SEED_COOLDOWN + 100);
+  }
+
+  heal() {
+    if (!this.doc || !this.soup || this.isHollow() || this.doc.surface) return;
+    const s = this.soup;
+    this.commit([{ p: 'surface', v: s.surface }, ...(s.shown ? [{ p: 'bottom', v: s.bottom }] : [])]);
+    this.kick();
+  }
+
+  /** 題目自己的那兩格。湯底只有揭曉之後才進文件。 */
+  fillSoup(doc) {
+    const s = this.soup;
+    if (!s) return doc;
+    doc.surface = s.surface;
+    doc.bottom = s.shown ? s.bottom : '';
+    return doc;
   }
 
   /**
@@ -197,13 +255,164 @@ export class Room {
     if (!this.isHollow() || hasContent(this.doc)) return;
     const doc = sanitizeDoc(m.doc);
     if (!doc) return this.err(ws, 'bad_seed');
-    this.doc = doc;
+    // 題目那兩格以伺服器為準：客戶端送回來的湯底是誰寫的都有可能
+    this.doc = this.fillSoup(doc);
     this.seeding = 0;                          // 補齊了，關掉窗口
     this.blast(this.syncMsg());
+    this.kick();
   }
 
   // 不特別在最後一人離線時清掉文件：物件閒置後本來就會被回收，記憶體跟著沒。
   // 中間那段空窗反而是好事 —— 有人不小心關掉分頁馬上回來，這局還在。
+
+  // ── AI 主持 ─────────────────────────
+  async loadSoup() {
+    if (this.soup === undefined) this.soup = (await this.state.storage.get('soup')) || null;
+    return this.soup;
+  }
+
+  saveSoup() { return this.state.storage.put('soup', this.soup); }
+
+  hosting() {
+    const s = this.soup;
+    return !!(s && s.on && !s.shown);
+  }
+
+  /**
+   * 題目交給 AI 之後誰能寫什麼。湯麵、湯底與揭底提議只有伺服器能寫 ——
+   * 湯底一旦能被玩家寫進文件，就不再是藏起來的那一份。AI 在場時答案與註解也是它的。
+   * 被請離的期間答案欄還給人：貼題的人知道湯底，可以自己接著主持。
+   */
+  mayWrite(op) {
+    const s = this.soup;
+    if (!s || s.shown || !op || typeof op.p !== 'string') return true;   // 格式錯的交給 applyPatch
+    if (op.p === 'surface' || op.p === 'bottom' || op.p === 'ask') return false;
+    return !(s.on && /^rows\.\d{1,3}\.(a|n)$/.test(op.p));
+  }
+
+  /**
+   * 呼叫 AI 主持。房間裡已經有藏著的題目就是接續那一題，不必再貼；
+   * 否則收下這一次貼上來的湯麵與湯底。湯底只進 storage，不進文件。
+   */
+  async onHost(ws, m) {
+    if (this.isHollow()) return;              // 還在等人補，這時候寫題目會擋掉 seed
+    const s = this.soup;
+    if (s && !s.shown) {
+      if (s.on) return;
+      s.on = true;
+      await this.saveSoup();
+      this.tellHere();
+      return this.kick();
+    }
+
+    const soup = cleanSoup(m);
+    if (!soup) return this.err(ws, 'bad_soup');
+    if (!(await this.allowHost(ws))) return this.err(ws, 'host_rate_limited');
+
+    this.soup = { ...soup, on: true, shown: false, calls: 0 };
+    this.stuck.clear();
+    await this.saveSoup();
+    await this.state.storage.setAlarm(Date.now() + IDLE);
+    this.commit([{ p: 'surface', v: soup.surface }, { p: 'bottom', v: '' }]);
+    this.tellHere();
+    this.kick();
+  }
+
+  async onDismiss() {
+    const s = this.soup;
+    if (!s || s.shown || !s.on) return;
+    s.on = false;                             // 正在等的那一題回來時會看到這個，結果直接丟掉
+    await this.saveSoup();
+    this.tellHere();
+  }
+
+  async reveal() {
+    const s = this.soup;
+    s.shown = true;
+    s.on = false;                             // 湯底都攤開了，AI 再回答也沒有意義
+    await this.saveSoup();
+    this.commit([{ p: 'bottom', v: s.bottom }]);
+    this.tellHere();
+  }
+
+  async allowHost(ws) {
+    let ip = '';
+    try { ip = (ws.deserializeAttachment() || {}).ip || ''; } catch { /* 沒帶 */ }
+    if (!ip) return false;
+    const gate = this.env.LIMITER.get(this.env.LIMITER.idFromName('host:' + ip));
+    const res = await gate.fetch('https://limiter/?h=' + HOST_PER_HOUR + '&d=' + HOST_PER_DAY);
+    return res.ok;
+  }
+
+  /** 有待答的列就開始判。同一時間只跑一個迴圈，照列號一題一題來。 */
+  kick() {
+    if (this.judging || !this.hosting()) return;
+    this.judging = this.judgeAll()
+      .catch(e => console.error('[judge]', String(e && e.message || e)))
+      .finally(() => { this.judging = null; });
+  }
+
+  nextPending() {
+    const d = this.doc;
+    for (let i = 0; i < d.rows.length && i < d.lives; i++) {
+      const r = d.rows[i];
+      if (r.q.trim() && !r.a && this.stuck.get(i) !== r.q) return i;
+    }
+    return -1;
+  }
+
+  async judgeAll() {
+    for (;;) {
+      const s = this.soup;
+      if (!this.hosting() || !this.doc || this.isHollow()) return;
+      const i = this.nextPending();
+      if (i < 0) return;
+
+      if (s.calls >= CALLS_MAX) {
+        s.on = false;
+        await this.saveSoup();
+        this.tellHere();
+        return this.blast({ t: 'err', code: 'host_cap' });
+      }
+      const q = this.doc.rows[i].q;
+      s.calls++;
+      await this.saveSoup();
+
+      const t0 = Date.now();
+      const r = await judge(this.env.AI, s, q);
+
+      // 等模型的這幾秒裡什麼都可能發生：被請離、被清空、玩家改了題目、別人先答了
+      if (this.soup !== s || !this.hosting() || !this.doc) return;
+      const row = this.doc.rows[i];
+      if (!row || row.q !== q || row.a) continue;
+
+      // 只記列號與用量，不記提問與湯底 —— 日誌是 wrangler tail 看得到的地方
+      console.log('[judge]', JSON.stringify({ row: i + 1, a: r.a, err: r.err, ms: Date.now() - t0, neurons: r.neurons }));
+
+      if (r.err === 'spent') {
+        s.on = false;
+        await this.saveSoup();
+        this.tellHere();
+        return this.blast({ t: 'err', code: 'ai_spent' });
+      }
+      if (r.err) {
+        this.stuck.set(i, q);
+        if (row.n !== STUCK) this.commit([{ p: 'rows.' + i + '.n', v: STUCK }]);
+        continue;
+      }
+      const ops = [{ p: 'rows.' + i + '.a', v: r.a }];
+      if (row.n === STUCK) ops.push({ p: 'rows.' + i + '.n', v: '' });
+      this.commit(ops);
+    }
+  }
+
+  // 題目在 storage 裡放著，房間就一直在（見 connect）。沒人在就別讓它永遠留著。
+  async alarm() {
+    if (this.sockets().length) return this.state.storage.setAlarm(Date.now() + DAY);
+    this.soup = null;
+    this.doc = null;
+    await this.state.storage.deleteAll();
+  }
 
   // ── 限流 ────────────────────────────
   spend(ws) {
@@ -217,22 +426,6 @@ export class Room {
     return true;
   }
 
-  /**
-   * 寫入闖關：'locked'（單房唯讀）、'frozen'（全站停寫）或 null。
-   * 每個物件實例只讀一次就記在記憶體 —— 沒有輪詢，所以不會白吃額度。
-   * lock 由管理指令直接打進這顆 DO，當下就會更新 this.flags，所以是即時的；
-   * frozen 在 KV，這裡只在物件醒來時讀一次，屬於比較鈍的工具。
-   */
-  async guard() {
-    if (!this.flags) {
-      const locked = (await this.state.storage.get('lock')) === 1;
-      let frozen = false;
-      if (this.env.CTRL) frozen = (await this.env.CTRL.get('frozen', { cacheTtl: 60 })) === '1';
-      this.flags = { locked, frozen };
-    }
-    return this.flags.locked ? 'locked' : (this.flags.frozen ? 'frozen' : null);
-  }
-
   // ── 廣播 ────────────────────────────
   blast(msg) {
     const s = JSON.stringify(msg);
@@ -243,72 +436,5 @@ export class Room {
 
   err(ws, code) {
     try { ws.send(JSON.stringify({ t: 'err', code })); } catch { /* ignore */ }
-  }
-
-  // ── 管理（只從 Worker 的排程處理器進來）────
-  async admin(params) {
-    const op = params.get('op');
-    const peers = this.sockets().length;
-    const locked = (await this.state.storage.get('lock')) === 1;
-
-    if (op === 'lock' || op === 'unlock') {
-      if (op === 'lock') await this.state.storage.put('lock', 1);
-      else await this.state.storage.delete('lock');
-      if (this.flags) this.flags.locked = op === 'lock';   // 立刻生效，不等下次醒來
-      return Response.json({ ok: true, locked: op === 'lock', peers });
-    }
-
-    if (op === 'status') {
-      const doc = this.doc;
-      return Response.json({
-        ok: true,
-        online: peers > 0,
-        peers,
-        locked,
-        hasDoc: !!doc,
-        ...(doc ? {
-          rev: doc.rev,
-          lives: doc.lives,
-          rows: doc.rows.length,
-          bytes: new TextEncoder().encode(JSON.stringify(doc)).length,
-        } : {}),
-        ...(!doc && peers > 0 ? { note: this.nudge() } : {}),
-        ...(!doc && peers === 0 ? { note: '房間沒人在線，文件不落地所以沒有內容可看' } : {}),
-      });
-    }
-
-    if (op === 'dump') {
-      if (!this.doc) {
-        return Response.json({
-          ok: true, online: peers > 0, doc: null,
-          note: peers > 0 ? this.nudge() : '房間沒人在線，文件不落地所以沒有內容可匯出',
-        });
-      }
-      return Response.json({ ok: true, online: true, doc: this.doc });
-    }
-
-    // 剛醒來、手上是空的也照樣清 —— 廣播出去就會把大家手上那份一起清掉，
-    // 而且會取消「等人補」，所以不會被晚到的 seed 救回來。
-    if (op === 'wipe') {
-      this.wipe();
-      return Response.json({ ok: true, rev: this.doc.rev, peers });
-    }
-
-    if (op === 'delete') {
-      for (const ws of this.sockets()) {
-        try { ws.close(1001, 'room deleted'); } catch { /* 已斷線 */ }
-      }
-      this.doc = null;
-      this.flags = null;
-      await this.state.storage.deleteAll();   // 只有 lock 這一個 key
-      return Response.json({ ok: true, kicked: peers });
-    }
-
-    return Response.json({ ok: false, error: 'unknown_op' }, { status: 400 });
-  }
-
-  nudge() {
-    this.askSeed();
-    return '房間醒來後記憶體是空的，已向線上的人要一份回來，過幾秒再跑一次';
   }
 }

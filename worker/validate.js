@@ -12,6 +12,10 @@ export const LIM = {
   docBytes: 256 * 1024,
   msgBytes: 8 * 1024,
   peers: 32,          // 單房同時連線數
+  // 交給 AI 主持的題目要一次塞進一則訊息（msgBytes），CJK 一字三位元組，
+  // 所以比房間欄位本身的上限窄。短一點也省判題成本：每題都要把湯底送進模型一次。
+  hostSurface: 800,
+  hostBottom: 1500,
 };
 
 const PATH = /^(?:lives|surface|bottom|ask|want|rows\.(\d{1,3})\.(q|a|n))$/;
@@ -120,6 +124,18 @@ export function applyPatch(prev, ops) {
   doc.rev = prev.rev + 1;
   doc.updatedAt = Date.now();
   return { doc, ops: clean };
+}
+
+/**
+ * 呼叫 AI 主持時貼上來的題目。跟房間欄位走同一套清理，只是上限更窄，而且兩格都不能空。
+ * @returns {{surface,bottom}|null}
+ */
+export function cleanSoup(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const surface = text(raw.surface, LIM.hostSurface, false);
+  const bottom = text(raw.bottom, LIM.hostBottom, false);
+  if (surface === null || bottom === null || !surface.trim() || !bottom.trim()) return null;
+  return { surface, bottom };
 }
 
 /** 清空：保留生命數，其餘歸零。 */

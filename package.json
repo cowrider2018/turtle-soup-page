@@ -5,11 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail",
-    "setup:kv": "wrangler kv namespace create CTRL",
-    "soup": "node tools/soup.mjs",
-    "host": "node tools/host.mjs",
-    "pick": "node tools/soup-pick.mjs"
+    "tail": "wrangler tail"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

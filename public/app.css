@@ -316,6 +316,19 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   padding:7px 16px 7px calc(16px + .2em);cursor:pointer;transition:.2s;
 }
 .wipe:hover{background:rgba(255,45,126,.1);box-shadow:0 0 22px rgba(255,45,126,.35);text-shadow:0 0 10px var(--rose)}
+.hostbtn{
+  font-family:var(--serif);font-weight:600;font-size:.78rem;letter-spacing:.2em;
+  background:transparent;color:var(--lime);
+  border:1px solid rgba(166,255,77,.45);border-radius:2px;
+  padding:7px 16px 7px calc(16px + .2em);margin-right:8px;cursor:pointer;transition:.2s;
+}
+.hostbtn:hover{background:rgba(166,255,77,.08);box-shadow:0 0 22px rgba(166,255,77,.3);text-shadow:0 0 10px var(--lime)}
+.hostbtn[hidden]{display:none}
+
+/* 題目交給 AI 之後湯麵與湯底只剩伺服器能寫 */
+textarea[readonly]{border-style:dashed;color:#b9b3d3}
+textarea[readonly]:focus{box-shadow:none;border-color:var(--line)}
+.pick-btn:disabled{cursor:default;opacity:.75}
 
 /* ── 提示 ─────────────────────── */
 .veil{
@@ -340,6 +353,10 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
   animation:ignite 2.2s 1 both;
 }
 .card p{font-size:.92rem;color:#a8a1c4;margin:0 0 24px}
+.cform:empty{display:none}
+.cform{text-align:left;margin:0 0 22px;display:flex;flex-direction:column;gap:6px}
+.cform label{font-family:var(--mono);font-size:.72rem;letter-spacing:.12em;color:#a8a1c4;margin-top:6px}
+.cform textarea{min-height:90px;font-size:.92rem;padding:9px 11px;overflow:auto;resize:vertical}
 .acts{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
 .acts button{
   font-family:var(--sans);font-size:.88rem;letter-spacing:.1em;

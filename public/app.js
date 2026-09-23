@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  const LIM = { livesMin: 1, livesMax: 300, rows: 300, q: 300, n: 200 };
+  const LIM = { livesMin: 1, livesMax: 300, rows: 300, q: 300, n: 200, hostSurface: 800, hostBottom: 1500 };
   // 揭底提議的兩句文案，也是 ask 欄位僅有的兩個合法值。
   // near＝還差一格，full＝全部解開；文案寫死在這裡，房間文件只帶鍵名。
   const OFFER = {
@@ -19,8 +19,8 @@
   const qlist = $('qlist'), bulbs = $('bulbs'), tally = $('tally'), count = $('count'),
         leftNum = $('left'), ghost = $('ghost'),
         stash = $('stash'), surface = $('surface'), bottom = $('bottom'),
-        veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cacts = $('cacts'),
-        eyebrow = $('eyebrow');
+        veil = $('veil'), ctitle = $('ctitle'), ctext = $('ctext'), cform = $('cform'), cacts = $('cacts'),
+        eyebrow = $('eyebrow'), hostBtn = $('host'), revealBtn = $('reveal');
 
   const pad = n => String(n).padStart(2, '0');
   // 用掉生命的條件：問了問題或收到回答。只寫註解不算。
@@ -146,6 +146,7 @@
   }
 
   function openMenu(wrap) {
+    if (here === 'ear') return;
     if (openPick && openPick !== wrap) closeMenu();
     openPick = wrap;
     const menu = wrap.querySelector('.pick-menu');
@@ -172,6 +173,7 @@
   }
 
   function answer(li, v) {
+    if (here === 'ear') return;   // AI 在場時答案是它的，伺服器也會擋
     const i = Number(li.dataset.i), r = row(i);
     paintPick(li, v);
     if (r.a === v) return;
@@ -242,44 +244,44 @@
     // 選單開著就別重畫：那等於使用者正在挑答案
     if (force || li.querySelector('.pick') !== openPick) paintPick(li, r.a);
     li.classList.toggle('filled', alive(r));
+    paintLock(li);
     paintNote(i);
     grow(q); grow(n);
   }
 
-  /* ── 主持端在不在 ──────────────────────
-     狀態由伺服器從「誰連著」推導（見 worker/room.js 的 here），所以主持行程一死，
-     綠燈自己就熄了 —— 沒有任何過期狀態要清。
-     ear＝有人掛著等問題，floor＝hold 守著房間、主持人還在準備，''＝沒有主持端。 */
+  /* ── AI 主持 ──────────────────────
+     狀態由伺服器從它手上那一題推導（見 worker/room.js 的 here），不在文件裡，
+     所以沒有人能靠 seed 一份文件回去就宣稱「有人在主持」。
+     ear＝AI 正在回答，away＝題目還藏在伺服器上但 AI 被請離了，''＝沒有交給 AI。 */
 
   const BADGE = {
     '':      ['Lateral · Soup · Log', ''],
-    floor:   ['HOST IS LOADING', 'floor'],
+    away:    ['HOST IS AWAY', 'floor'],
     ear:     ['BOT IS HOSTING', 'ear'],
   };
-  // 主持人每答一列都要離開 wait 幾秒才回來。照實反映的話燈會一直閃，
-  // 所以綠燈熄掉前先撐一段時間，真的沒回來才認。
-  const EAR_GRACE = 15000;
-  let here = '', badge = '', graceTimer = null;
+  const HOST_LABEL = { '': '呼叫 AI 主持', ear: '請離 AI', away: '請回 AI' };
+  let here = '';
 
   function setHere(v) {
     here = BADGE[v] ? v : '';
-    if (here === 'ear') {
-      clearTimeout(graceTimer); graceTimer = null;
-      return paintHere(here);
-    }
-    if (badge === 'ear') {
-      if (!graceTimer) graceTimer = setTimeout(() => { graceTimer = null; paintHere(here); }, EAR_GRACE);
-      return;
-    }
-    if (!graceTimer) paintHere(here);
-  }
-
-  function paintHere(v) {
-    badge = BADGE[v] ? v : '';
-    const [text, tag] = BADGE[badge];
+    const [text, tag] = BADGE[here];
     eyebrow.textContent = text;
     eyebrow.dataset.here = tag;
+    hostBtn.textContent = HOST_LABEL[here];
+    revealBtn.hidden = !here;
+    // 湯底藏在伺服器上的整段期間，湯麵與湯底都只剩伺服器能寫
+    surface.readOnly = bottom.readOnly = !!here;
+    bottom.placeholder = here ? '湯底由 AI 保管，揭曉前誰都看不到' : '尚未解答';
+    if (here === 'ear') closeMenu();
+    for (const li of qlist.children) paintLock(li);
     for (let i = 0; i < qlist.children.length; i++) paintNote(i);
+  }
+
+  // AI 在場時答案與註解是它的。被請離之後還給人：貼題的人知道湯底，可以自己接著主持。
+  function paintLock(li) {
+    const btn = li.querySelector('.pick-btn'), n = li.querySelector('.qnote');
+    if (btn) btn.disabled = here === 'ear';
+    if (n) n.readOnly = here === 'ear';
   }
 
   /* 有問題、還沒答的那一列，用註解欄的提示字告訴玩家該不該等。
@@ -287,8 +289,8 @@
      玩家一打字就消失，也不可能有人不小心把它送進房間。 */
   function noteHint(r) {
     if (!r || !r.q.trim() || r.a) return '註解';
-    if (badge === 'ear') return '🐢 host thinking...';
-    if (badge === 'floor') return '🐢 host loading...';
+    if (here === 'ear') return '🐢 host thinking...';
+    if (here === 'away') return 'host is away';
     return 'no host online';
   }
 
@@ -564,12 +566,20 @@
 
   function onErr(code) {
     if (code === 'rate_limited') return;                        // 客戶端已 debounce，偶發即可忽略
-    if (code === 'locked') {
-      return once(code, () => note('這一鍋被鎖住了',
-        '目前是唯讀狀態，改不動了。看得到的內容還是最新的。'));
+    if (code === 'hosted') return dropLocked();
+    if (code === 'bad_soup') {
+      return note('題目不完整', '湯麵與湯底都要填。湯麵最多 ' + LIM.hostSurface
+        + ' 字，湯底最多 ' + LIM.hostBottom + ' 字。');
     }
-    if (code === 'frozen') {
-      return once(code, () => note('暫停服務中', '服務目前停止寫入，請稍後再試。'));
+    if (code === 'host_rate_limited') {
+      return note('先休息一下', '同一個網路短時間內貼了太多題給 AI，請晚點再試。');
+    }
+    if (code === 'ai_spent') {
+      return once(code, () => note('AI 今天的額度用完了',
+        'AI 主持人每天有固定的免費額度，台北時間早上 8 點重置。貼題的人知道湯底，可以先手動回答。'));
+    }
+    if (code === 'host_cap') {
+      return once(code, () => note('這一題問太多次了', '同一題 AI 最多回答 200 次，它先離席了。'));
     }
     if (code === 'doc_too_big' || code === 'too_many_rows') {
       return once(code, () => note('這鍋湯已經到上限了', '伺服器拒絕了剛才的修改，請先精簡內容。'));
@@ -612,6 +622,18 @@
     for (const [p, v] of inflight) if (!pending.has(p)) pending.set(p, v);
     inflight.clear();
     if (!timer) timer = setTimeout(flush, 50);
+  }
+
+  /* 伺服器擋下了只剩它能寫的欄位（題目交給 AI 之後的湯麵、湯底、答案與註解）。
+     那幾筆要從重送清單裡拿掉再要一份全量：留著的話，全量一到 replay() 又把它們送出去，
+     伺服器再擋、再要全量，就這樣繞圈。 */
+  function dropLocked() {
+    const locked = here === 'ear'
+      ? /^(?:surface|bottom|ask|rows\.\d{1,3}\.(?:a|n))$/
+      : /^(?:surface|bottom|ask)$/;
+    for (const p of [...inflight.keys()]) if (locked.test(p)) inflight.delete(p);
+    for (const p of [...pending.keys()]) if (locked.test(p)) pending.delete(p);
+    send({ t: 'resync' });
   }
 
   /* ── 本地編輯 ────────────────────── */
@@ -701,10 +723,12 @@
 
   let lastFocus = null;
   let owedOffer = false;      // 被別的視窗擋掉的揭底提議，等它關掉再跳
-  function ask(title, text, actions, locked) {
+  function ask(title, text, actions, locked, fields) {
     lastFocus = document.activeElement;
     ctitle.textContent = title;
     ctext.textContent = text;
+    cform.textContent = '';
+    if (fields) cform.append(...fields);
     cacts.textContent = '';
     veil.dataset.locked = locked ? '1' : '';
     actions.forEach(a => {
@@ -716,7 +740,8 @@
       cacts.appendChild(btn);
     });
     veil.classList.add('open');
-    if (cacts.firstChild) cacts.firstChild.focus();
+    const first = cform.querySelector('textarea') || cacts.firstChild;
+    if (first) first.focus();
   }
   function close() {
     if (veil.dataset.locked) return;
@@ -741,8 +766,7 @@
      只寫一句的話，差一格的人會以為自己全中，被揭出沒想到的那塊時只覺得被暴雷。
      文案寫死在這裡，房間文件只帶 near / full 兩個字面值。
 
-     湯底不在伺服器上，所以這裡按下去只是把 want 寫進房間；真正把湯底寫回來的是
-     主持人那一端（tools/host.mjs 的 wait 收到 want 就揭）。按下去到湯底出現會差幾秒。 */
+     這裡按下去只是把 want 寫進房間；湯底藏在伺服器上的話，由伺服器收到 want 當下寫回來。 */
   function offerReveal() {
     const copy = OFFER[doc.ask];
     if (!copy || doc.want) return;
@@ -762,6 +786,47 @@
       { label: '知道了' },
     ]);
   }
+
+  /* 呼叫 AI 主持。貼上的湯底直接交給伺服器，不經過文件 —— 文件人人讀得到，
+     邊打邊同步的話，湯底在按下送出之前就已經傳到每個人的畫面上了。
+     房裡已經寫著的湯麵與湯底先帶進來，原本由人主持的一局可以直接交接。 */
+  function field(labelText, value, max) {
+    const label = document.createElement('label');
+    label.textContent = labelText + '（最多 ' + max + ' 字）';
+    const box = document.createElement('textarea');
+    box.maxLength = max;
+    box.value = value.slice(0, max);
+    label.htmlFor = box.id = 'f' + Math.random().toString(36).slice(2);
+    return [label, box];
+  }
+
+  function hostDialog() {
+    const [sl, sBox] = field('湯麵', doc.surface, LIM.hostSurface);
+    const [bl, bBox] = field('湯底', doc.bottom, LIM.hostBottom);
+    ask('交給 AI 主持',
+      '湯底只交給伺服器，房裡其他人看不到，直到有人按下「揭曉湯底」。AI 只會回答 T／F／I，不給提示。',
+      [
+        { label: '交給 AI', run: () => {
+          const s = sBox.value.trim(), b = bBox.value.trim();
+          if (!s || !b) return note('題目不完整', '湯麵與湯底都要填。');
+          send({ t: 'host', surface: s, bottom: b });
+        } },
+        { label: '取消' },
+      ], false, [sl, sBox, bl, bBox]);
+  }
+
+  hostBtn.onclick = () => {
+    if (here === 'ear') return send({ t: 'dismiss' });
+    if (here === 'away') return send({ t: 'host' });   // 題目還在伺服器上，接續同一題
+    hostDialog();
+  };
+
+  revealBtn.onclick = () => {
+    ask('要揭曉湯底嗎', '房裡所有人都會看到湯底，AI 也會跟著離席。這一步收不回來。', [
+      { label: '揭曉湯底', danger: true, run: () => { doc.want = true; queue('want', true); } },
+      { label: '再想想' },
+    ]);
+  };
 
   $('wipe').onclick = () => {
     const n = used();

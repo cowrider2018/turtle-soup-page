@@ -1,5 +1,3 @@
-import { drainQueue } from './admin.js';
-
 export { Room } from './room.js';
 export { Limiter } from './limiter.js';
 
@@ -64,11 +62,6 @@ export default {
     // 爬蟲掃路徑不會在儲存體留下任何東西。
     return page(req, env, url);
   },
-
-  // 管理指令唯一的執行時機。對外沒有任何路由，所以沒有東西可以被攻擊。
-  async scheduled(event, env) {
-    await drainQueue(env);
-  },
 };
 
 /* ── 房號 ─────────────────────────── */
@@ -95,29 +88,23 @@ async function openWs(req, env, url) {
 
   const room = env.ROOM.get(env.ROOM.idFromName(id));
 
-  // 主持端自報身分，房裡的人才知道現在有沒有人會回答（見 room.js 的 here）。
-  // 白名單兩個值，其餘一律當普通玩家 —— 這條路徑上的字串全是不可信輸入。
-  const asked = url.searchParams.get('role');
-  const role = asked === 'floor' || asked === 'ear' ? asked : '';
-
-  const q = '&name=' + encodeURIComponent(id)    // DO 自己不知道房號，鎖房要用
-    + (role ? '&role=' + role : '');
+  // 呼叫 AI 主持要按 IP 限流，但 WebSocket 訊息本身不帶 IP，所以連線時先交給房間。
+  // 交出去的是雜湊，房間裡不會出現原始 IP。
+  const ip = await hash(req.headers.get('CF-Connecting-IP') || '0.0.0.0');
+  const q = '&ip=' + ip;
 
   // 第一趟只問「房間在不在」，不會建立任何東西
   const res = await room.fetch('https://room/ws?probe=1' + q, { headers: { Upgrade: 'websocket' } });
   if (res.status !== 404 || res.headers.get('X-Room-Missing') !== '1') return res;
 
   // 開新房才動用限流：這是唯一會增加儲存體用量的路徑。
-  // 全站凍結時也擋在這裡 —— 凍結只停寫入，但也該停止長出新房間。
-  if (await frozen(env)) return fail(503, 'frozen');
-  if (!(await allowCreate(req, env))) return fail(429, 'create_rate_limited');
+  if (!(await allowCreate(env, ip))) return fail(429, 'create_rate_limited');
 
   return room.fetch('https://room/ws?create=1' + q, { headers: { Upgrade: 'websocket' } });
 }
 
-async function allowCreate(req, env) {
-  const ip = req.headers.get('CF-Connecting-IP') || '0.0.0.0';
-  const gate = env.LIMITER.get(env.LIMITER.idFromName('ip:' + await hash(ip)));
+async function allowCreate(env, ip) {
+  const gate = env.LIMITER.get(env.LIMITER.idFromName('ip:' + ip));
   const res = await gate.fetch('https://limiter/');
   return res.ok;
 }
@@ -143,11 +130,6 @@ function sameOrigin(req, url) {
   const origin = req.headers.get('Origin');
   if (!origin) return false;
   try { return new URL(origin).host === url.host; } catch { return false; }
-}
-
-async function frozen(env) {
-  if (!env.CTRL) return false;
-  return (await env.CTRL.get('frozen', { cacheTtl: 60 })) === '1';
 }
 
 // IP 只用來限流，不落長期紀錄，所以先雜湊再當 DO 名稱
