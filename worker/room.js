@@ -11,6 +11,7 @@ const HOST_PER_HOUR = 3;      // 每個 IP 貼新題的次數。接續同一題�
 const HOST_PER_DAY = 10;
 const IDLE = 7 * DAY;         // 題目放在 storage 裡，這麼久沒人在就清掉
 const STUCK = '🐢 判不出來，換個問法再問一次';
+const ACTS = 8;                // 記住最近幾個呼叫／請離的操作 ID（見 done）
 
 /**
  * 一個房間一個 Durable Object。
@@ -35,6 +36,8 @@ export class Room {
     // {surface, bottom, on, shown, calls}；undefined＝還沒讀，null＝這間房沒有交給 AI
     this.soup = undefined;
     this.judging = null;        // 判題迴圈正在跑的那個 promise
+    this.starting = false;      // 新題目正在過限流；重送的那一則別再算一次
+    this.acts = [];             // 最近處理過的呼叫／請離操作 ID
     this.stuck = new Map();     // 列 -> 判不出來的那句提問；玩家改了問法才再試
   }
 
@@ -123,7 +126,7 @@ export class Room {
       case 'wipe':    return this.wipe();
       case 'resync':  return this.sendSync(ws);
       case 'host':    return this.onHost(ws, m);
-      case 'dismiss': return this.onDismiss();
+      case 'dismiss': return this.onDismiss(ws, m);
       default:        return this.err(ws, 'unknown');
     }
   }
@@ -228,7 +231,12 @@ export class Room {
     this.seeding = now;
     this.blast({ t: 'need' });
     // 題目在伺服器手上，不必等人補。等窗口過了還是空的，自己把湯麵放回去。
-    if (this.soup) setTimeout(() => this.heal(), SEED_COOLDOWN + 100);
+    if (this.soup) this.healLater();
+  }
+
+  healLater() {
+    const left = SEED_COOLDOWN - (Date.now() - this.seeding);
+    setTimeout(() => this.heal(), Math.max(left, 0) + 100);
   }
 
   heal() {
@@ -293,37 +301,93 @@ export class Room {
   /**
    * 呼叫 AI 主持。房間裡已經有藏著的題目就是接續那一題，不必再貼；
    * 否則收下這一次貼上來的湯麵與湯底。湯底只進 storage，不進文件。
+   *
+   * 每一次按鈕帶一個操作 ID，前端等不到這個 ID 的回應就用同一個 ID 重送。處理過的 ID
+   * 再來只回報現況：它多半是回應在路上掉了。只看狀態判斷會出錯 —— 中間要是有人按了請離，
+   * 遲到的重送會把 AI 又叫回來。
+   *
+   * ID 是客戶端寫的，不可信，所以它只用來「別做兩次」，不用來省限流：
+   * 開新題不管 ID 怎麼寫都要過每個 IP 的限流。同一個循環裡多的呼叫本來就沒有作用。
    */
   async onHost(ws, m) {
-    if (this.isHollow()) return;              // 還在等人補，這時候寫題目會擋掉 seed
+    const id = actId(m.id);
+    if (this.done(id)) return this.ack(ws, id);
+
     const s = this.soup;
     if (s && !s.shown) {
-      if (s.on) return;
-      s.on = true;
-      await this.saveSoup();
-      this.tellHere();
-      return this.kick();
+      this.remember(id);
+      if (!s.on) {
+        s.on = true;
+        await this.saveSoup();
+        this.tellHere();
+        this.kick();                          // 還在等人補的話 kick 不會動，補完或 heal 之後才開始
+      }
+      return this.ack(ws, id);
     }
+    if (this.starting) return;                // 上一則還在過限流；這一則等不到回應會重送
 
     const soup = cleanSoup(m);
-    if (!soup) return this.err(ws, 'bad_soup');
-    if (!(await this.allowHost(ws))) return this.err(ws, 'host_rate_limited');
+    if (!soup) return this.err(ws, 'bad_soup', id);
+    this.starting = true;
+    try {
+      if (!(await this.allowHost(ws))) return this.err(ws, 'host_rate_limited', id);
+      this.soup = { ...soup, on: true, shown: false, calls: 0 };
+      this.remember(id);
+      this.stuck.clear();
+      await this.saveSoup();
+      await this.state.storage.setAlarm(Date.now() + IDLE);
+    } finally {
+      this.starting = false;
+    }
 
-    this.soup = { ...soup, on: true, shown: false, calls: 0 };
-    this.stuck.clear();
-    await this.saveSoup();
-    await this.state.storage.setAlarm(Date.now() + IDLE);
-    this.commit([{ p: 'surface', v: soup.surface }, { p: 'bottom', v: '' }]);
+    // 題目以 storage 為準，文件裡的湯麵只是它的投影。還在等人補的話現在寫進文件，
+    // 文件就有了內容，seed 會被擋掉；所以交給補完那一刻（onSeed 的 fillSoup）或
+    // 窗口過了還沒人補時的 heal。
+    //
+    // 這一則多半就是叫醒物件、讓它進入空窗的那一則：貼題要花時間，對話框開著的期間
+    // 房裡沒有任何訊息，物件早就休眠了。丟掉它曾經是「按了沒反應」的原因。
+    if (this.isHollow()) this.healLater();
+    else this.commit([{ p: 'surface', v: soup.surface }, { p: 'bottom', v: '' }]);
     this.tellHere();
     this.kick();
+    this.ack(ws, id);
   }
 
-  async onDismiss() {
+  async onDismiss(ws, m) {
+    const id = actId(m.id);
+    if (this.done(id)) return this.ack(ws, id);
+    this.remember(id);
     const s = this.soup;
-    if (!s || s.shown || !s.on) return;
-    s.on = false;                             // 正在等的那一題回來時會看到這個，結果直接丟掉
-    await this.saveSoup();
-    this.tellHere();
+    if (s && !s.shown && s.on) {
+      s.on = false;                           // 正在等的那一題回來時會看到這個，結果直接丟掉
+      await this.saveSoup();
+      this.tellHere();
+    }
+    this.ack(ws, id);
+  }
+
+  /**
+   * 這個操作處理過了嗎。只記最後一個不夠：呼叫之後接著請離，請離的 ID 會把呼叫的蓋掉，
+   * 遲到的呼叫重送就又把 AI 叫回來了。所以記最近幾個。
+   *
+   * 記憶體裡的那份撐不過休眠，所以題目上也記一份 —— 呼叫與請離本來就要寫題目，
+   * 順手帶上不多花一次寫入。
+   */
+  done(id) {
+    if (!id) return false;
+    return this.acts.includes(id) || !!(this.soup && Array.isArray(this.soup.acts) && this.soup.acts.includes(id));
+  }
+
+  remember(id) {
+    if (!id) return;
+    const had = this.soup && Array.isArray(this.soup.acts) ? this.soup.acts : [];
+    this.acts = [...new Set([...had, ...this.acts, id])].slice(-ACTS);
+    if (this.soup) this.soup.acts = this.acts;
+  }
+
+  /** 只回給送出的那個連線，帶著它的操作 ID：前端收到這一則才解除按鈕的封鎖。 */
+  ack(ws, id) {
+    try { ws.send(JSON.stringify({ t: 'ack', id, here: this.here() })); } catch { /* 已斷線 */ }
   }
 
   async reveal() {
@@ -434,7 +498,10 @@ export class Room {
     }
   }
 
-  err(ws, code) {
-    try { ws.send(JSON.stringify({ t: 'err', code })); } catch { /* ignore */ }
+  err(ws, code, id) {
+    try { ws.send(JSON.stringify({ t: 'err', code, id })); } catch { /* ignore */ }
   }
 }
+
+// 操作 ID 是客戶端寫的：只收短的英數字串，其餘當作沒帶
+const actId = v => (typeof v === 'string' && /^[A-Za-z0-9_-]{8,40}$/.test(v) ? v : '');

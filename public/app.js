@@ -262,13 +262,64 @@
   const HOST_LABEL = { '': '呼叫 AI 主持', ear: '請離 AI', away: '請回 AI' };
   let here = '';
 
+  /* 呼叫與請離都要等伺服器回應才算數。送出不等於送到：看起來連著的連線可能早就斷了
+     （筆電闔上、手機換網路），伺服器也可能處理到一半被重啟。所以每按一次產生一個
+     操作 ID，送出後把「呼叫／請離」與「全部清空」都封鎖，收到這個 ID 的 ack 或錯誤
+     才放開；等不到就用同一個 ID 重送。伺服器認得處理過的 ID，重送不會做第二次。 */
+  const HOST_RETRY = 6000, HOST_TRIES = 3;
+  let hostWait = null;   // {msg, tries, timer}
+
+  function hostSend(msg) {
+    if (hostWait) return;
+    msg.id = actionId();
+    hostWait = { msg, tries: 0, timer: null };
+    paintHostBtn();
+    hostTry();
+  }
+
+  function actionId() {
+    const b = crypto.getRandomValues(new Uint8Array(12));
+    return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  function hostTry() {
+    const w = hostWait;
+    if (!w) return;
+    if (w.tries >= HOST_TRIES) {
+      endWait();
+      return note('主持人沒有回應', '伺服器一直沒有回應，可能是網路不穩。題目還留著，請再按一次。');
+    }
+    w.tries++;
+    send(w.msg);           // 沒連上就送不出去，交給重連之後的 onopen 或下一輪重試
+    w.timer = setTimeout(hostTry, HOST_RETRY);
+  }
+
+  function endWait() {
+    if (!hostWait) return;
+    clearTimeout(hostWait.timer);
+    hostWait = null;
+    paintHostBtn();
+  }
+
+  function paintHostBtn() {
+    hostBtn.disabled = !!hostWait;
+    $('wipe').disabled = !!hostWait;
+    if (hostWait) {
+      hostBtn.textContent = hostWait.msg.t === 'dismiss' ? '請離中…' : '呼叫中…';
+      revealBtn.hidden = true;
+      return;
+    }
+    hostBtn.textContent = HOST_LABEL[here];
+    revealBtn.hidden = !here;
+  }
+
   function setHere(v) {
     here = BADGE[v] ? v : '';
+    if (here === 'ear') hostDraft = null;   // 題目已經在伺服器手上了
     const [text, tag] = BADGE[here];
     eyebrow.textContent = text;
     eyebrow.dataset.here = tag;
-    hostBtn.textContent = HOST_LABEL[here];
-    revealBtn.hidden = !here;
+    paintHostBtn();
     // 湯底藏在伺服器上的整段期間，湯麵與湯底都只剩伺服器能寫
     surface.readOnly = bottom.readOnly = !!here;
     bottom.placeholder = here ? '湯底由 AI 保管，揭曉前誰都看不到' : '尚未解答';
@@ -427,7 +478,10 @@
       + location.host + '/ws?r=' + encodeURIComponent(RID));
 
     tries++;
-    ws.onopen = () => { everOpen = true; tries = 0; backoff = 1000; flush(); };
+    ws.onopen = () => {
+      everOpen = true; tries = 0; backoff = 1000; flush();
+      if (hostWait) send(hostWait.msg);   // 斷線期間沒送出去的呼叫或請離，接上就補送
+    };
     ws.onmessage = e => {
       let m;
       try { m = JSON.parse(e.data); } catch { return; }
@@ -480,7 +534,17 @@
       return;
     }
     if (m.t === 'here') { setHere(m.here || ''); return; }
-    if (m.t === 'err') { onErr(m.code); return; }
+    if (m.t === 'ack') {
+      setHere(m.here || '');
+      if (hostWait && m.id === hostWait.msg.id) endWait();
+      return;
+    }
+    if (m.t === 'err') {
+      // 呼叫被拒（題目不完整、限流）也是這個操作的回應：不必再等、也不必重送
+      if (hostWait && m.id && m.id === hostWait.msg.id) endWait();
+      onErr(m.code);
+      return;
+    }
   }
 
   /* ── 伺服器不落地，所以這一份鏡像就是備份 ── */
@@ -800,24 +864,35 @@
     return [label, box];
   }
 
+  /* 貼到一半的題目。對話框一關，輸入框就跟著消失，而重開時房裡的湯麵湯底往往是空的
+     （剛清空過），所以沒送成功、被退回、或只是點到框外，都得從頭再貼一次。
+     只留在記憶體：湯底不該寫進 sessionStorage，AI 接手之後就丟掉。 */
+  let hostDraft = null;
+
   function hostDialog() {
-    const [sl, sBox] = field('湯麵', doc.surface, LIM.hostSurface);
-    const [bl, bBox] = field('湯底', doc.bottom, LIM.hostBottom);
+    const src = hostDraft || { surface: doc.surface, bottom: doc.bottom };
+    const [sl, sBox] = field('湯麵', src.surface, LIM.hostSurface);
+    const [bl, bBox] = field('湯底', src.bottom, LIM.hostBottom);
+    const keepDraft = () => { hostDraft = { surface: sBox.value, bottom: bBox.value }; };
+    sBox.addEventListener('input', keepDraft);
+    bBox.addEventListener('input', keepDraft);
     ask('交給 AI 主持',
       '湯底只交給伺服器，房裡其他人看不到，直到有人按下「揭曉湯底」。AI 只會回答 T／F／I，不給提示。',
       [
         { label: '交給 AI', run: () => {
+          keepDraft();
           const s = sBox.value.trim(), b = bBox.value.trim();
           if (!s || !b) return note('題目不完整', '湯麵與湯底都要填。');
-          send({ t: 'host', surface: s, bottom: b });
+          hostSend({ t: 'host', surface: s, bottom: b });
         } },
         { label: '取消' },
       ], false, [sl, sBox, bl, bBox]);
   }
 
   hostBtn.onclick = () => {
-    if (here === 'ear') return send({ t: 'dismiss' });
-    if (here === 'away') return send({ t: 'host' });   // 題目還在伺服器上，接續同一題
+    if (hostWait) return;                                // 上一個動作還沒有回應
+    if (here === 'ear') return hostSend({ t: 'dismiss' });
+    if (here === 'away') return hostSend({ t: 'host' });   // 題目還在伺服器上，接續同一題
     hostDialog();
   };
 
@@ -829,6 +904,7 @@
   };
 
   $('wipe').onclick = () => {
+    if (hostWait) return;   // 呼叫或請離還沒有回應，這時清空會跟它搶順序
     const n = used();
     ask('要清空整鍋湯嗎',
       '湯麵、湯底' + (n ? '和 ' + n + ' 則提問' : '') + '都會消失，房內所有人都會被清空。',

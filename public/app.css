@@ -324,6 +324,7 @@ ol.qlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;g
 }
 .hostbtn:hover{background:rgba(166,255,77,.08);box-shadow:0 0 22px rgba(166,255,77,.3);text-shadow:0 0 10px var(--lime)}
 .hostbtn[hidden]{display:none}
+.hostbtn:disabled,.wipe:disabled{opacity:.55;cursor:wait;box-shadow:none;text-shadow:none;background:transparent}
 
 /* 題目交給 AI 之後湯麵與湯底只剩伺服器能寫 */
 textarea[readonly]{border-style:dashed;color:#b9b3d3}

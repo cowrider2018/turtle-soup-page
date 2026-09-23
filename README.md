@@ -89,6 +89,28 @@ operator step: hosting starts, pauses and ends with buttons at the foot of the p
 Presence (`here`) is derived from the stored puzzle rather than from the document, so a client
 cannot claim that a host is present by seeding a document of its own.
 
+### Calling and dismissing reliably
+
+Sending is not delivering. A connection that looks open may already be dead (a laptop lid, a phone
+changing networks), and the object may restart halfway through. So each press of 呼叫 / 請離
+carries an action ID. Until the server sends back an `ack` for that ID, or an error carrying it,
+the page disables both that button and 全部清空, labelled 呼叫中… / 請離中…; without an answer it
+resends with the same ID every six seconds, three times, then says the host is not responding.
+The pasted puzzle is kept in memory meanwhile, never in `sessionStorage`, so trying again needs no
+second paste.
+
+The server keeps the last eight action IDs, in memory and on the stored puzzle, and answers a
+repeat with the current state instead of acting twice. Remembering only the last one is not
+enough: a call followed by a dismissal would forget the call, and a late resend of it would bring
+the AI back. The ID is client-written and so only prevents doing a thing twice; it never waives a
+limit. A second call within one call–dismiss cycle simply has no effect, and a new puzzle goes
+through the per-IP limit however the ID is set.
+
+A call that arrives while the object is waiting for a seed is not dropped. Pasting takes long
+enough for an idle room to hibernate, so the call is usually the very message that wakes it; it
+once vanished there, which looked like a button that did nothing. The puzzle is stored at once
+and projected onto the document when the seed arrives, or by the heal that runs if none does.
+
 ### What the server enforces
 
 Room content is untrusted input in both directions — a player can type instructions into a
@@ -130,8 +152,8 @@ also cheaper: the solution is sent to the model with every question.
 ### Storage
 
 A hosted room persists one `soup` key: surface, solution, whether the AI is present, whether the
-solution has been revealed, and how many questions have been judged. It is written when hosting
-starts, pauses or ends, and once per judged question. Because of it, a hosted room survives the
+solution has been revealed, how many questions have been judged, and the recent action IDs. It is
+written when hosting starts, pauses or ends, and once per judged question. Because of it, a hosted room survives the
 object being evicted: the surface comes back from storage, although rows that no browser still
 holds do not. An alarm removes the key once the room has been empty for seven days.
 
